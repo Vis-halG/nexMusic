@@ -9,6 +9,8 @@
 // service account (Project settings → Service accounts → Generate new private
 // key). Keep it only in the Worker; never put it in the app.
 
+import { cloudinaryStatus } from './cloudinary_status.js';
+
 const GOOGLE_KEYS_URL =
   'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
 const SCOPES =
@@ -28,7 +30,8 @@ export default {
       const fingerprints = (env.APP_SHA256 || '').split(',').map(s => s.trim()).filter(s => /^[0-9A-Fa-f:]{95}$/.test(s));
       return reply(fingerprints.length ? [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: 'com.thenex.nex_music', sha256_cert_fingerprints: fingerprints } }] : []);
     }
-    if (request.method !== 'POST') {
+    const cloudinaryReport = request.method === 'GET' && url.pathname === '/cloudinary/status';
+    if (request.method !== 'POST' && !cloudinaryReport) {
       return reply({ error: 'Use POST.' }, 405);
     }
     let account;
@@ -47,6 +50,7 @@ export default {
       return reply({ error: 'Sign in to nexMusic first.' }, 401);
     }
 
+    if (cloudinaryReport) return cloudinaryStatus(env);
     if (url.pathname === '/recognize') return recognize(request, env, account, senderUid, url.searchParams.get('mode') === 'humming');
     if (url.pathname !== '/' && url.pathname !== '/notify') return reply({error:'Route not found.'},404);
 

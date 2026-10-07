@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -163,6 +164,21 @@ void main() {
     expect(batch.files.single.name, endsWith('.m4a'));
     await batch.dispose();
   });
+
+  test(
+    'long Hindi and emoji titles produce portable audio filenames',
+    () async {
+      final titled = song(
+        'a',
+      ).copyWith(title: List.filled(100, 'गीत🎵').join());
+      final batch = await preparation().prepare([titled]);
+      final name = batch.files.single.name;
+      expect(utf8.encode(name).length, lessThan(255));
+      expect(name, endsWith('.mp3'));
+      expect(await batch.files.single.readAsBytes(), [1, 2, 3]);
+      await batch.dispose();
+    },
+  );
 
   test(
     'failure in any song discards the whole batch instead of sharing partial audio',

@@ -29,7 +29,7 @@ cd push_worker
 npx wrangler deploy
 ```
 
-New routes are `GET /capabilities`, `GET /share/*`, `GET /.well-known/assetlinks.json` and authenticated `POST /recognize`. Existing activity notification POST behavior is retained. Sharing pages escape metadata, contain no third-party scripts and do not expose private file URLs.
+New routes are `GET /capabilities`, `GET /share/*`, `GET /.well-known/assetlinks.json`, authenticated `GET /cloudinary/status` and authenticated `POST /recognize`. Cloudinary reporting needs the `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET` Worker secrets; see the README for setup and reporting periods. Existing activity notification POST behavior is retained. Sharing pages escape metadata, contain no third-party scripts and do not expose private file URLs.
 
 For verified Android App Links set `APP_SHA256` to the release signing certificate's SHA-256 fingerprint (comma-separated fingerprints are supported). The custom `nexmusic://share/...` scheme works independently. If `PUSH_WORKER_URL` is overridden, update the Android manifest host and the associated domain too.
 

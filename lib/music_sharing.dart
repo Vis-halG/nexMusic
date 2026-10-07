@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -284,7 +285,18 @@ class SongFilePreparation {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     if (title.isEmpty) title = 'Song';
-    return title.length > 100 ? title.substring(0, 100) : title;
+    // Android/Linux filenames have a byte limit, so character counts are not
+    // enough for Hindi titles or emoji. Leave room for the index and extension.
+    final shortened = StringBuffer();
+    var bytes = 0;
+    for (final rune in title.runes) {
+      final character = String.fromCharCode(rune);
+      final length = utf8.encode(character).length;
+      if (bytes + length > 180) break;
+      shortened.write(character);
+      bytes += length;
+    }
+    return shortened.toString().trimRight();
   }
 
   static String? _extensionFor(String source, String mime) {

@@ -16,6 +16,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_update.dart';
+import 'cloudinary_status.dart';
 import 'media_library.dart';
 import 'music_data.dart';
 import 'music_discovery.dart';
@@ -579,6 +580,25 @@ class MusicController extends ChangeNotifier {
   bool get uploadsConfigured =>
       cloudinaryCloudName.isNotEmpty && cloudinaryUploadPreset.isNotEmpty;
   String? get uid => _auth?.currentUser?.uid;
+
+  Future<CloudinaryStatus> loadCloudinaryStatus() async {
+    final token = await _auth?.currentUser?.getIdToken();
+    if (token == null || token.isEmpty) {
+      throw const CloudinaryStatusException(
+        'Sign in to view Cloudinary account usage.',
+      );
+    }
+    final status = await CloudinaryStatusService().load(
+      workerUrl: pushWorkerUrl,
+      token: token,
+    );
+    if (status.cloudName != cloudinaryCloudName) {
+      throw const CloudinaryStatusException(
+        'Cloudinary account reporting is connected to a different account.',
+      );
+    }
+    return status;
+  }
 
   bool get uploading => uploads.any((item) => !item.finished);
   int get uploadsFinished => uploads.where((item) => item.finished).length;

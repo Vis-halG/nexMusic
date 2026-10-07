@@ -60,6 +60,37 @@ the APK could upload to the account. The app itself only sends audio or video
 under 100 MB. Deleting a song in the app removes it from everyone's list; the
 file stays on Cloudinary until it is removed from the Media Library.
 
+Profile → **Advance** opens Cloudinary reporting: audio/media counts in the
+`nexmusic` folder, account storage, remaining reported limits, rolling 30-day
+bandwidth/credits/transformations, and the hourly Admin API quota. The web
+browser remains available inside Advance on Android/iOS. Catalogue counts and
+today's personal listening are shown separately from Cloudinary account usage.
+Cloudinary's usage endpoint does not expose a live daily song-play allowance;
+the screen labels this as unavailable rather than treating 30-day usage as today.
+If a credit-based plan has no separate storage limit, the screen estimates the
+additional storage budget at 1 GB per unused storage credit and labels the
+budget as shared with bandwidth and transformations.
+
+To connect account reporting, deploy the updated `push_worker` and configure
+`CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET` as Worker secrets. Set its
+`CLOUDINARY_CLOUD_NAME` variable to `j0fu6gju` (the default), or the same cloud
+name supplied to the app. Retain the existing `SERVICE_ACCOUNT` secret. The
+authenticated `GET /cloudinary/status` route only returns reporting fields,
+caches results for five minutes, and never sends credentials to the app.
+Missing reporting configuration leaves app catalogue counts visible with an
+explicit account-usage-unavailable message. No API credentials belong in Dart
+defines or the APK.
+
+```powershell
+cd push_worker
+npx wrangler secret put CLOUDINARY_API_KEY
+npx wrangler secret put CLOUDINARY_API_SECRET
+npx wrangler deploy
+```
+
+Reporting semantics follow the [Cloudinary Admin API](https://cloudinary.com/documentation/admin_api#usage)
+and its [rolling credit usage documentation](https://cloudinary.com/documentation/developer_onboarding_faq_track_credits).
+
 ## Music expansion
 
 Personal playlists, queue editing/restore, repeat modes, sleep timer, lyrics/translation, download manager, discovery controls, device music, listening stats, shared playlists/rooms, Cast/Auto hooks and long-form playback are included. See [feature setup and verified limitations](docs/music-expansion-setup.md) before enabling the cloud features. The new Worker and Firestore rules must be deployed to the existing backend. Song recognition/humming adapters require configured provider credentials.
@@ -200,8 +231,8 @@ Setup:
 
 1. Firebase console → Project settings → Service accounts → Generate new
    private key. Keep the JSON file private; it never goes into the app.
-2. Cloudflare dashboard → Workers & Pages → Create → Worker. Replace the code
-   with `push_worker/worker.js` and deploy.
+2. From `push_worker`, run `npx wrangler deploy` to bundle and deploy the Worker
+   and its Cloudinary reporting module.
 3. Worker → Settings → Variables and Secrets → add a secret named
    `SERVICE_ACCOUNT` whose value is the whole JSON file.
 4. Put the Worker URL in `pushWorkerUrl` in `lib/phone_services.dart` (or pass

@@ -16,6 +16,7 @@ import 'package:video_player/video_player.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'app_update.dart';
+import 'cloudinary_status.dart';
 import 'main.dart';
 import 'media_library.dart';
 import 'music_controller.dart';
@@ -45,6 +46,7 @@ part 'device_ui.dart';
 part 'portability_ui.dart';
 part 'previews_ui.dart';
 part 'song_selection_ui.dart';
+part 'advance_ui.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -5457,13 +5459,12 @@ class ProfileScreen extends StatelessWidget {
           trailing: '${music.savedMedia.length}',
           onTap: () => _push(context, const PrivateLibraryScreen()),
         ),
-        if (_webViewSupported)
-          _NavRow(
-            icon: Icons.travel_explore_rounded,
-            title: 'Advanced Web Browser',
-            subtitle: 'Full browsing control, ad blocker & media downloader',
-            onTap: () => _push(context, const NexBrowserScreen(sharedLink: '')),
-          ),
+        _NavRow(
+          icon: Icons.insights_rounded,
+          title: 'Advance',
+          subtitle: 'Cloudinary songs, storage & playback usage',
+          onTap: () => _push(context, const AdvanceScreen()),
+        ),
         const Divider(),
         if (music.phone != null)
           SwitchListTile(
