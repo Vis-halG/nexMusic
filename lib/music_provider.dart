@@ -579,11 +579,22 @@ class YouTubeMusicProvider implements MusicProvider {
     final byline = renderer['longBylineText'] ?? renderer['shortBylineText'];
     final runs = _map(byline)?['runs'];
     final artists = <String>[];
+    var album = '', albumId = '';
     if (runs is List) {
       for (final raw in runs.whereType<Map>()) {
         final text = _string(raw['text']).trim();
-        if (text.isEmpty || text == '•' || text == '&' || text == ',') continue;
-        artists.add(text);
+        final browseId = _string(
+          _at(Map<String, dynamic>.from(raw), [
+            'navigationEndpoint',
+            'browseEndpoint',
+            'browseId',
+          ]),
+        );
+        if (browseId.startsWith('UC') && text.isNotEmpty) artists.add(text);
+        if (browseId.startsWith('MPRE') && text.isNotEmpty) {
+          album = text;
+          albumId = browseId;
+        }
       }
     }
     if (artists.isEmpty) {
@@ -591,13 +602,7 @@ class YouTubeMusicProvider implements MusicProvider {
       if (first.isNotEmpty) artists.add(first);
     }
 
-    final lengthRun = _map(renderer['lengthText'])?['runs'];
-    var durationMs = 0;
-    if (lengthRun is List && lengthRun.isNotEmpty) {
-      final durStr = _string(lengthRun.first['text']);
-      final parsed = _durationMs(durStr);
-      if (parsed != null) durationMs = parsed;
-    }
+    final durationMs = _durationMs(_text(renderer['lengthText'])) ?? 0;
 
     return Song(
       id: 'provider:$id:$sourceId',
@@ -608,6 +613,8 @@ class YouTubeMusicProvider implements MusicProvider {
       providerId: id,
       sourceId: sourceId,
       artist: artists.toSet().join(', '),
+      album: album,
+      albumId: albumId,
       artworkUrl: _largestThumbnail(renderer),
       durationMs: durationMs,
     );

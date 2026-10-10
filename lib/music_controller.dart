@@ -8,6 +8,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:just_audio/just_audio.dart';
@@ -21,6 +22,8 @@ import 'media_library.dart';
 import 'music_data.dart';
 import 'music_discovery.dart';
 import 'music_provider.dart';
+import 'music_recommendations.dart';
+import 'music_sharing.dart';
 import 'phone_services.dart';
 import 'listening_models.dart';
 import 'personal_music.dart';
@@ -581,7 +584,7 @@ class MusicController extends ChangeNotifier {
       cloudinaryCloudName.isNotEmpty && cloudinaryUploadPreset.isNotEmpty;
   String? get uid => _auth?.currentUser?.uid;
 
-  Future<CloudinaryStatus> loadCloudinaryStatus() async {
+  Future<CloudinaryStatus> loadCloudinaryStatus({bool refresh = false}) async {
     final token = await _auth?.currentUser?.getIdToken();
     if (token == null || token.isEmpty) {
       throw const CloudinaryStatusException(
@@ -591,6 +594,7 @@ class MusicController extends ChangeNotifier {
     final status = await CloudinaryStatusService().load(
       workerUrl: pushWorkerUrl,
       token: token,
+      refresh: refresh,
     );
     if (status.cloudName != cloudinaryCloudName) {
       throw const CloudinaryStatusException(
@@ -1170,17 +1174,87 @@ class MusicController extends ChangeNotifier {
 
   // Recommendations and radio from both music providers.
 
+  /// Reuses downloaded originals and extracts audio from provider containers.
+  SongFilePreparation createAudioFilePreparation({
+    int? maxBytes,
+    void Function(Song song, int index, int total, double? fraction)?
+    onProgress,
+  }) {
+    final account = personal;
+    return SongFilePreparation(
+      resolve: (song) => resolvedPlayableUrl(song, downloading: true),
+      headers: playbackHeadersFor,
+      maxBytes: maxBytes ?? account.settings.storageBudgetMb * 1024 * 1024,
+      copyContentUri: (uri, _) async {
+        final service = phone;
+        if (service == null) {
+          throw StateError('This device song could not be read.');
+        }
+        return service.copyAudioToCache(uri);
+      },
+      extractAudio: (source) async {
+        if (defaultTargetPlatform != TargetPlatform.android) {
+          throw UnsupportedError(
+            'Audio extraction from this source is available on Android.',
+          );
+        }
+        final output =
+            await const MethodChannel(
+              'com.thenex.nexmusic/media_tools',
+            ).invokeMethod<String>('extractAndTrimAudio', {
+              'source': source.path,
+              'startMs': 0,
+              'endMs': 2147483647,
+            });
+        if (output == null) {
+          throw StateError('The audio could not be extracted.');
+        }
+        return File(output);
+      },
+      beforeDownload: () async {
+        if (account != personal) {
+          throw StateError('Your account changed. Try again.');
+        }
+        if (account.settings.wifiOnly &&
+            !await downloads.canDownloadOnCurrentNetwork()) {
+          throw StateError(
+            'Connect to Wi-Fi or turn off Wi-Fi-only downloads.',
+          );
+        }
+      },
+      onProgress: onProgress,
+    );
+  }
+
   /// Recommendations from both music catalogues, using the same seed track.
-  Future<List<Song>> fetchRadioForSong(Song song, {int limit = 25}) =>
-      discovery.radio(song, limit: limit);
+  Future<List<Song>> fetchRadioForSong(
+    Song song, {
+    int limit = 25,
+    Set<String> excludeIds = const {},
+  }) async {
+    final account = personal;
+    final taste = recommendationTaste();
+    final tracks = await discovery.radio(song, limit: math.max(24, limit * 2));
+    if (account != personal) return [];
+    return taste.rank(
+      tracks,
+      accepts: personal.accepts,
+      seed: song,
+      excludeIds: excludeIds,
+      limit: limit,
+    );
+  }
 
   /// Plays [song] and loads recommendations from both providers into the queue.
   Future<void> startRadio(Song song) async {
+    final account = personal;
     await play(song);
     try {
       final radioTracks = await fetchRadioForSong(song, limit: 30);
       final filtered = radioTracks.where((t) => t.id != song.id).toList();
-      if (filtered.isNotEmpty && current?.id == song.id) {
+      if (filtered.isNotEmpty &&
+          account == personal &&
+          current?.id == song.id) {
         playback.queue.replace([song, ...filtered], song);
         await playback.queueChanged();
       }
@@ -1199,9 +1273,7 @@ class MusicController extends ChangeNotifier {
     if (seed == null) return null;
 
     final radio = await fetchRadioForSong(seed, limit: limit);
-    final filtered = rankForListener(
-      radio.where((s) => s.id != seed.id).toList(),
-    );
+    final filtered = radio;
     if (filtered.isEmpty) return null;
 
     return (
@@ -1212,19 +1284,83 @@ class MusicController extends ChangeNotifier {
     );
   }
 
-  /// Builds a personalized Quick Picks list based on recent stream tracks,
-  /// falling back to a mix of both providers' featured tracks.
+  MusicTaste recommendationTaste() {
+    library.rememberSongs([..._recentStreamSongs, ...songs]);
+    final stats = personal.stats(withinDays: 30);
+    final listening = stats['tracks'] as Map<String, Map<String, dynamic>>;
+    final entries = {for (final entry in library.entries) entry.song.id: entry};
+    final legacyRecent = {
+      for (var i = 0; i < _recentStreamSongs.length; i++)
+        _recentStreamSongs[i].id: DateTime.now()
+            .subtract(Duration(days: i))
+            .millisecondsSinceEpoch,
+    };
+    final known = <String, Song>{
+      for (final entry in entries.values) entry.song.id: entry.song,
+      for (final row in personal.activity.values)
+        for (final song in readSongs([row['song']])) song.id: song,
+      for (final row in listening.values)
+        for (final song in readSongs([row['song']])) song.id: song,
+    };
+    return MusicTaste([
+      for (final song in known.values)
+        MusicPreference(
+          song,
+          liked:
+              entries[song.id]?.liked == true ||
+              liked.contains(song.id) ||
+              personal.activity[song.id]?['liked'] == true,
+          plays: math.max(
+            entries[song.id]?.plays ?? 0,
+            entries[song.id]?.wasPlayed == true ? 1 : 0,
+          ),
+          lastPlayed: math.max(
+            entries[song.id]?.lastPlayed ?? 0,
+            (personal.activity[song.id]?['lastPlayed'] as num? ??
+                    (entries[song.id]?.lastPlayed == 0
+                        ? legacyRecent[song.id]
+                        : 0) ??
+                    0)
+                .toInt(),
+          ),
+          listenedMs: (listening[song.id]?['ms'] as num? ?? 0).toInt(),
+          completed: (listening[song.id]?['completed'] as num? ?? 0).toInt(),
+          skips: (listening[song.id]?['skips'] as num? ?? 0).toInt(),
+        ),
+    ], language: personal.settings.language);
+  }
+
+  Future<List<Song>> fetchPersonalizedStream({
+    int limit = 20,
+    int page = 1,
+  }) async {
+    final account = personal;
+    final tracks = await discovery.recommendations(
+      recommendationTaste(),
+      accepts: account.accepts,
+      limit: limit,
+      page: page,
+      excludeIds: {if (current != null) current!.id},
+    );
+    if (account != personal) return [];
+    library.rememberSongs(tracks);
+    return tracks;
+  }
+
+  /// Familiar favourites alongside discoveries from several distinct seeds.
   Future<List<Song>> fetchQuickPicks({int limit = 20}) async {
-    if (_recentStreamSongs.isNotEmpty) {
-      final sample = _recentStreamSongs.take(3).toList();
-      final futures = sample.map((s) => fetchRadioForSong(s, limit: 8));
-      final candidateLists = await Future.wait(futures);
-      final combined = mergeMusicResults(candidateLists, limit: limit);
-      if (combined.isNotEmpty) return rankForListener(combined);
-    }
-    return rankForListener(
-      (await discovery.browse(limit: limit)).songs,
-    ).take(limit).toList();
+    if (limit <= 0) return [];
+    final account = personal;
+    final taste = recommendationTaste();
+    final tracks = await fetchPersonalizedStream(limit: limit);
+    if (account != personal) return [];
+    final familiar = taste
+        .seeds(accepts: personal.accepts, limit: math.max(1, limit ~/ 4))
+        .where((s) => s.isProvider && s.id != current?.id)
+        .toList();
+    final picks = mergeMusicResults([tracks, familiar], limit: limit);
+    library.rememberSongs(picks);
+    return picks;
   }
 
   List<Song> rankForListener(List<Song> tracks) => rankDiscovery(

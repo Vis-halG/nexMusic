@@ -18,7 +18,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # of the product and file versions while build-number is used as the build suffix.
 # The build number stays above 4001, the x86_64 split test build, so a new APK
 # installs over any earlier test APK instead of failing as a downgrade.
-version: 0.4.3+8026
+version: 0.4.4+8027
 
 environment:
   sdk: ^3.12.2

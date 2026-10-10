@@ -118,3 +118,31 @@ test('failed concurrent reports do not escape errors or get cached as success', 
   assert.equal((await cloudinaryStatus(env)).status, 502);
   assert.equal(calls, 6);
 });
+
+test('manual Cloudinary refresh updates cached reports and coalesces repeated taps', async (t) => {
+  let time = Date.now(), calls = 0;
+  t.mock.method(Date, 'now', () => time);
+  t.mock.method(globalThis, 'fetch', async url => {
+    calls++;
+    return Response.json(String(url).endsWith('/usage')
+      ? { storage: { usage: calls }, credits: { usage: 1, limit: 25 } }
+      : { total_count: calls });
+  });
+  const env = { CLOUDINARY_API_KEY: 'refresh-test', CLOUDINARY_API_SECRET: 'secret' };
+  let report = await (await cloudinaryStatus(env)).json();
+  assert.equal(report.cached, false);
+  assert.ok(report.cacheExpiresAt);
+  assert.ok(report.manualRefreshAfter);
+  assert.equal(calls, 3);
+  report = await (await cloudinaryStatus(env, { refresh: true })).json();
+  assert.equal(report.cached, true);
+  assert.equal(calls, 3);
+  time += 61000;
+  await cloudinaryStatus(env);
+  assert.equal(calls, 3, 'automatic polling preserves the five-minute cache');
+  const refreshed = await Promise.all([cloudinaryStatus(env, { refresh: true }), cloudinaryStatus(env, { refresh: true })]);
+  assert.equal(calls, 6, 'simultaneous manual checks share one new account report');
+  assert.equal((await refreshed[0].json()).cached, false);
+  await cloudinaryStatus(env, { refresh: true });
+  assert.equal(calls, 6);
+});

@@ -4,12 +4,23 @@ Flutter app for shared music, online songs and videos.
 Signed-in listeners can upload songs and videos into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.3+8026` has four tabs: Home, Stream, Library and Profile. Home
+Version `0.4.4+8027` has four tabs: Home, Stream, Library and Profile. Home
 groups songs and videos into recently played/watched, liked, most played and
 never played collections. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and artist browsing. Available music videos open from
 the song player. Library also groups songs by artist. Random Play uses every
 source on Home, online songs on Stream, and saved/library songs on Library.
+
+Stream now opens with **For you**, using persisted likes, listening time,
+completed plays, recent history and early skips. Several distinct seed artists
+drive song radio, with language affinity, recording de-duplication and artist
+variety in ranking. Cross-provider radio verifies the seed recording rather
+than blindly using the first search hit. Trending remains available separately.
+Stream → a song's **⋮ → Upload to Library** prepares its audio, fills in title
+and artist, and opens the existing category upload flow. Preparation supports
+progress, cancellation, retry, Wi-Fi-only downloads and the 100 MB upload cap.
+YouTube container audio extraction requires Android. Original downloads are
+reused without being deleted or moved.
 
 Uploads and downloads wait and automatically retry temporary socket/DNS errors
 instead of failing the entire queue. Downloads show Wi-Fi waits and explicit
@@ -80,6 +91,16 @@ caches results for five minutes, and never sends credentials to the app.
 Missing reporting configuration leaves app catalogue counts visible with an
 explicit account-usage-unavailable message. No API credentials belong in Dart
 defines or the APK.
+
+Advance checks the account report every minute while visible and in the
+foreground; automatic checks reuse the Worker report for up to five minutes.
+Manual refresh requests a new report at most once per minute and shares
+concurrent requests. Report fetch time and cached status are displayed.
+**Uploads today** counts current catalogue entries created on the device's
+local date. Open web browser from Advance and use **Cloudinary statistics**
+in its toolbar to return to usage reporting. Cloudinary account usage is
+periodically updated, not an instantaneous play counter. Deploy the updated
+Worker to enable manual cache refresh and reporting freshness metadata.
 
 ```powershell
 cd push_worker

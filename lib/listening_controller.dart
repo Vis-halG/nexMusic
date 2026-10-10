@@ -168,9 +168,19 @@ extension MusicListeningActions on MusicController {
             account.settings.downloadedOnly) {
           return;
         }
-        final tracks = await fetchRadioForSong(seed, limit: 20);
+        final tracks = await fetchRadioForSong(
+          seed,
+          limit: 20,
+          excludeIds: playback.queue.tracks.map((s) => s.id).toSet(),
+        );
         if (account != personal || seed.id != current?.id) return;
-        for (final track in tracks.where(account.accepts)) {
+        for (final track in tracks.where(
+          (s) =>
+              account.accepts(s) &&
+              !playback.queue.tracks.any(
+                (queued) => sameMusicRecording(queued, s),
+              ),
+        )) {
           playback.queue.add(track);
         }
       },

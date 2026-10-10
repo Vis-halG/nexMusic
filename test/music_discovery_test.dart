@@ -107,7 +107,7 @@ void main() {
         track('jiosaavn', 'jio-radio'),
       ]);
       final yt = FakeMusicProvider('ytmusic', [
-        track('ytmusic', 'yt-match'),
+        track('ytmusic', 'yt-match', title: 'seed'),
         track('ytmusic', 'yt-radio'),
       ]);
       final songs = await MusicDiscovery([jio, yt]).radio(seed);

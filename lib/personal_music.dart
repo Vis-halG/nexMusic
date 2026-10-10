@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'listening_models.dart';
 import 'music_data.dart';
+import 'music_recommendations.dart';
 
 /// Persistent state is bound to one account for its entire lifetime.
 class PersonalMusic extends ChangeNotifier {
@@ -256,7 +257,11 @@ class PersonalMusic extends ChangeNotifier {
 
   bool accepts(Song song) =>
       !hiddenSongs.contains(song.id) &&
-      !hiddenArtists.contains(song.artist.toLowerCase());
+      !hiddenArtists.any(
+        (artist) => musicArtists(
+          artist,
+        ).intersection(musicArtists(song.artist)).isNotEmpty,
+      );
   void hide(Song song, {bool artist = false}) {
     if (artist && song.artist.isNotEmpty) {
       hiddenArtists.add(song.artist.toLowerCase());
@@ -400,6 +405,7 @@ class PersonalMusic extends ChangeNotifier {
                       (e.value['skips'] as int) * 3)
                   .clamp(-9, 9),
       },
+      'tracks': totals,
     };
   }
 

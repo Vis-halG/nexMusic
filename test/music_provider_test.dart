@@ -365,6 +365,39 @@ void main() {
       expect(results.first.artist, 'Artist 1');
       expect(results.first.durationMs, 195000);
     });
+
+    test('radio metadata separates album names from artists', () async {
+      final provider = YouTubeMusicProvider(
+        postJson: (_, _, _) async => {
+          'playlistPanelVideoRenderer': {
+            'videoId': 'one',
+            'title': {'simpleText': 'Song'},
+            'longBylineText': {
+              'runs': [
+                {
+                  'text': 'Arijit Singh',
+                  'navigationEndpoint': {
+                    'browseEndpoint': {'browseId': 'UCartist'},
+                  },
+                },
+                {'text': ' • '},
+                {
+                  'text': 'Movie Album',
+                  'navigationEndpoint': {
+                    'browseEndpoint': {'browseId': 'MPREalbum'},
+                  },
+                },
+              ],
+            },
+            'lengthText': {'simpleText': '3:30'},
+          },
+        },
+      );
+      final songs = await provider.loadRadio('seed');
+      expect(songs.single.artist, 'Arijit Singh');
+      expect(songs.single.album, 'Movie Album');
+      expect(songs.single.durationMs, 210000);
+    });
   });
 
   group('YouTubeVideoProvider', () {

@@ -1,5 +1,6 @@
 import 'music_data.dart';
 import 'music_provider.dart';
+import 'music_recommendations.dart';
 
 /// Round-robin ranking keeps both catalogues visible, with stable de-duplication.
 List<Song> mergeMusicResults(Iterable<List<Song>> sources, {int? limit}) {
@@ -14,10 +15,11 @@ List<Song> mergeMusicResults(Iterable<List<Song>> sources, {int? limit}) {
       if (row >= list.length) continue;
       final song = list[row];
       final recording =
-          '${song.kind}:${normalize(song.title)}:${normalize(song.artist)}';
+          '${song.kind}:${recordingTitle(song.title)}:${normalize(song.artist)}';
       if (!ids.add(song.id)) continue;
       // Missing artist metadata is insufficient evidence of a duplicate.
       if (song.artist.trim().isNotEmpty && !recordings.add(recording)) continue;
+      if (result.any((s) => sameMusicRecording(s, song))) continue;
       result.add(song);
       if (limit != null && result.length >= limit) return result;
     }
@@ -90,10 +92,16 @@ class MusicDiscovery {
   }
 
   Future<List<Song>> radio(Song seed, {int limit = 25}) async {
+    if (limit <= 0) return [];
+    final selected =
+        providers.where((p) => p.id == 'jiosaavn' || p.id == 'ytmusic').toList()
+          ..sort(
+            (a, b) => (b.id == seed.providerId ? 1 : 0).compareTo(
+              a.id == seed.providerId ? 1 : 0,
+            ),
+          );
     final lists = await Future.wait(
-      providers.where((p) => p.id == 'jiosaavn' || p.id == 'ytmusic').map((
-        provider,
-      ) async {
+      selected.map((provider) async {
         try {
           return await _cached(
             'radio:${provider.id}:${seed.id}:$limit',
@@ -103,12 +111,23 @@ class MusicDiscovery {
                   !(seed.providerId == 'ytvideo' && provider.id == 'ytmusic')) {
                 final matches = await provider.searchSongs(
                   '${seed.title} ${seed.artist}'.trim(),
-                  limit: 1,
+                  limit: 5,
                 );
-                if (matches.isEmpty) return <Song>[];
-                sourceId = matches.first.sourceId;
+                final match = matchMusicSeed(seed, matches);
+                if (match == null) return <Song>[];
+                sourceId = match.sourceId;
               }
-              return provider.loadRadio(sourceId, limit: limit);
+              if (sourceId.isEmpty) return <Song>[];
+              final songs = await provider.loadRadio(
+                sourceId,
+                limit: limit + 1,
+              );
+              return songs
+                  .where(
+                    (s) =>
+                        s.sourceId != sourceId && !sameMusicRecording(s, seed),
+                  )
+                  .toList();
             },
           );
         } catch (_) {
@@ -116,14 +135,43 @@ class MusicDiscovery {
         }
       }),
     );
-    return mergeMusicResults(lists, limit: limit + 1)
+    return mergeMusicResults(lists)
         .where(
-          (s) =>
-              s.id != seed.id &&
-              !(s.title.toLowerCase() == seed.title.toLowerCase() &&
-                  s.artist.toLowerCase() == seed.artist.toLowerCase()),
+          (s) => !sameMusicRecording(s, seed) && !s.isVideo && !s.isLongform,
         )
         .take(limit)
         .toList();
+  }
+
+  Future<List<Song>> recommendations(
+    MusicTaste taste, {
+    required bool Function(Song) accepts,
+    int limit = 20,
+    int page = 1,
+    Set<String> excludeIds = const {},
+  }) async {
+    if (limit <= 0 || page < 1) return [];
+    final seeds = taste.seeds(accepts: accepts);
+    final lists = await Future.wait(seeds.map((s) => radio(s, limit: 24)));
+    final candidates = mergeMusicResults(lists);
+    final target = page * limit;
+    var ranked = taste.rank(
+      candidates,
+      accepts: accepts,
+      excludeIds: excludeIds,
+    );
+    if (ranked.length < target) {
+      final queries = taste.fallbackQueries;
+      final extra = await Future.wait(
+        queries.map((query) => browse(query: query, limit: 20)),
+      );
+      candidates.addAll(mergeMusicResults(extra.map((r) => r.songs)));
+      // Global charts are a cold-start fallback, never the primary taste signal.
+      if (queries.isEmpty || candidates.isEmpty) {
+        candidates.addAll((await browse(limit: 30)).songs);
+      }
+      ranked = taste.rank(candidates, accepts: accepts, excludeIds: excludeIds);
+    }
+    return ranked.skip((page - 1) * limit).take(limit).toList();
   }
 }

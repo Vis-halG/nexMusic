@@ -1,9 +1,10 @@
 // Read-only Cloudinary reporting. Credentials stay in Worker secrets.
 const reports = new Map();
 const CACHE_MS = 5 * 60 * 1000;
+const MANUAL_REFRESH_MS = 60 * 1000;
 const AUDIO_FORMATS = ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus', 'amr', '3ga', 'mka', 'aiff', 'aif'];
 
-export async function cloudinaryStatus(env) {
+export async function cloudinaryStatus(env, { refresh = false } = {}) {
   const cloud = env.CLOUDINARY_CLOUD_NAME || 'j0fu6gju';
   if (!env.CLOUDINARY_API_KEY || !env.CLOUDINARY_API_SECRET) {
     return response({ error: 'Cloudinary account reporting has not been connected yet.', code: 'not_configured' }, 503);
@@ -13,14 +14,21 @@ export async function cloudinaryStatus(env) {
   }
   const cacheKey = JSON.stringify([cloud, env.CLOUDINARY_API_KEY, env.CLOUDINARY_API_SECRET]);
   const cached = reports.get(cacheKey);
-  const promise = cached && cached.expiresAt > Date.now() ? cached.promise : loadReport(cloud, env);
+  const now = Date.now();
+  const reuse = cached && cached.expiresAt > now &&
+    (!refresh || now - cached.startedAt < MANUAL_REFRESH_MS);
+  const promise = reuse ? cached.promise : loadReport(cloud, env);
   if (promise !== cached?.promise) {
     // Coalesce refreshes from different phones and protect the hourly Admin quota.
     reports.clear();
-    reports.set(cacheKey, { promise, expiresAt: Date.now() + CACHE_MS });
+    reports.set(cacheKey, { promise, startedAt: now, expiresAt: now + CACHE_MS });
   }
   try {
-    return response(await promise);
+    const report = await promise;
+    return response({ ...report, cached: Boolean(reuse),
+      cacheExpiresAt: new Date(reports.get(cacheKey)?.expiresAt ?? now + CACHE_MS).toISOString(),
+      manualRefreshAfter: new Date((reports.get(cacheKey)?.startedAt ?? now) + MANUAL_REFRESH_MS).toISOString(),
+    });
   } catch {
     if (reports.get(cacheKey)?.promise === promise) reports.delete(cacheKey);
     return response({ error: 'Could not read Cloudinary usage. Try again later.' }, 502);

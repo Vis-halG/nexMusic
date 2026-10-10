@@ -109,6 +109,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('152 media files'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Cloudinary files in app catalogue'),
+        100,
+      );
       expect(find.text('1 listed file'), findsOneWidget);
       expect(find.textContaining('150 songs (audio formats)'), findsOneWidget);
       await tester.scrollUntilVisible(find.text('Storage used'), 150);
@@ -166,6 +170,43 @@ void main() {
     expect(tester.takeException(), isNull);
     music.dispose();
   });
+
+  testWidgets(
+    'automatic reports refresh only while enabled and in the foreground',
+    (tester) async {
+      final music = await _music();
+      var calls = 0;
+      await tester.pumpWidget(
+        _app(
+          music,
+          AdvanceScreen(
+            loadStatus: () async {
+              calls++;
+              return _report();
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(calls, 1);
+      await tester.pump(const Duration(minutes: 1));
+      await tester.pumpAndSettle();
+      expect(calls, 2);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump(const Duration(minutes: 1));
+      expect(calls, 2);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(minutes: 1));
+      expect(calls, 2);
+      await tester.tap(find.byTooltip('Refresh Cloudinary status'));
+      await tester.pumpAndSettle();
+      expect(calls, 3);
+      await tester.pumpWidget(const SizedBox.shrink());
+      music.dispose();
+    },
+  );
 
   testWidgets(
     'shared-credit storage is an estimate and today excludes other sources and dates',

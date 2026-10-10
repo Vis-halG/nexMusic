@@ -50,7 +50,7 @@ export default {
       return reply({ error: 'Sign in to nexMusic first.' }, 401);
     }
 
-    if (cloudinaryReport) return cloudinaryStatus(env);
+    if (cloudinaryReport) return cloudinaryStatus(env, { refresh: url.searchParams.get('refresh') === '1' });
     if (url.pathname === '/recognize') return recognize(request, env, account, senderUid, url.searchParams.get('mode') === 'humming');
     if (url.pathname !== '/' && url.pathname !== '/notify') return reply({error:'Route not found.'},404);
 

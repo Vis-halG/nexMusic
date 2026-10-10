@@ -7,12 +7,44 @@ class AdvanceScreen extends StatefulWidget {
   State<AdvanceScreen> createState() => _AdvanceScreenState();
 }
 
-class _AdvanceScreenState extends State<AdvanceScreen> {
+class _AdvanceScreenState extends State<AdvanceScreen>
+    with WidgetsBindingObserver {
   CloudinaryStatus? _status;
   Object? _account;
   String? _error;
   bool _busy = false;
   int _request = 0;
+  Timer? _refreshTimer;
+  bool _autoRefresh = true;
+  AppLifecycleState _lifecycle = AppLifecycleState.resumed;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (_autoRefresh &&
+          _lifecycle == AppLifecycleState.resumed &&
+          !_busy &&
+          _status != null &&
+          ModalRoute.of(context)?.isCurrent == true) {
+        unawaited(_refresh(manual: false));
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycle = state;
+  }
+
+  @override
+  void dispose() {
+    ++_request;
+    _refreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -25,7 +57,7 @@ class _AdvanceScreenState extends State<AdvanceScreen> {
     }
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({bool manual = true}) async {
     final request = ++_request;
     final music = context.read<MusicController>();
     final account = music.personal;
@@ -34,7 +66,9 @@ class _AdvanceScreenState extends State<AdvanceScreen> {
       _error = null;
     });
     try {
-      final status = await (widget.loadStatus ?? music.loadCloudinaryStatus)();
+      final status = widget.loadStatus != null
+          ? await widget.loadStatus!()
+          : await music.loadCloudinaryStatus(refresh: manual);
       if (!mounted ||
           request != _request ||
           !identical(account, music.personal)) {
@@ -148,6 +182,21 @@ class _AdvanceScreenState extends State<AdvanceScreen> {
               ],
             ),
             const SizedBox(height: 20),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Auto refresh'),
+              subtitle: const Text(
+                'Check the account report every minute while this screen is open',
+              ),
+              value: _autoRefresh,
+              onChanged: (value) => setState(() => _autoRefresh = value),
+            ),
+            if (status != null)
+              Text(
+                '${status.cached ? 'Cached account report' : 'Account report'} · fetched ${status.fetchedAt?.toLocal().toString().split('.').first ?? 'at an unknown time'}',
+                style: TextStyle(color: _muted(context), fontSize: 12),
+              ),
+            const SizedBox(height: 12),
             if (_busy) ...[
               const LinearProgressIndicator(),
               const SizedBox(height: 12),
@@ -196,6 +245,16 @@ class _AdvanceScreenState extends State<AdvanceScreen> {
                   : 'Loading catalogue…',
               detail:
                   '$audio songs · ${listed.length - audio} videos\n${_cloudBytes(bytes.toDouble())} of listed original files. This is not total account storage.',
+            ),
+            const SizedBox(height: 12),
+            _cloudCard(
+              context,
+              icon: Icons.cloud_upload_outlined,
+              title: 'Uploads today',
+              value:
+                  '${listed.where((s) => s.createdAt != null && s.createdAt!.toLocal().year == now.year && s.createdAt!.toLocal().month == now.month && s.createdAt!.toLocal().day == now.day).length} listed files',
+              detail:
+                  'Files uploaded today in the app catalogue, across signed-in users ($day, local time). Deleted entries are excluded. The account file total above includes retained files.',
             ),
             const SizedBox(height: 12),
             _metricCard(
@@ -276,14 +335,19 @@ class _AdvanceScreenState extends State<AdvanceScreen> {
             Text(
               status == null
                   ? 'Account limits will appear when Cloudinary reporting is connected.'
-                  : 'Cloudinary report updated: ${status.lastUpdated ?? 'Not supplied'}\nChecked: ${status.fetchedAt?.toLocal().toString().split('.').first ?? 'Not supplied'}\nCloudinary updates usage periodically. Reports are cached for up to 5 minutes.',
+                  : 'Cloudinary report updated: ${status.lastUpdated ?? 'Not supplied'}\nFetched: ${status.fetchedAt?.toLocal().toString().split('.').first ?? 'Not supplied'}\nAutomatic checks reuse reports for up to 5 minutes. Manual refresh requests the latest available report, at most once per minute. Cloudinary updates usage periodically; account figures are not instantaneous.',
               style: TextStyle(color: _muted(context), fontSize: 12),
             ),
             if (_webViewSupported) ...[
               const SizedBox(height: 24),
               OutlinedButton.icon(
-                onPressed: () =>
-                    _push(context, const NexBrowserScreen(sharedLink: '')),
+                onPressed: () => _push(
+                  context,
+                  const NexBrowserScreen(
+                    sharedLink: '',
+                    showCloudinaryStats: true,
+                  ),
+                ),
                 icon: const Icon(Icons.travel_explore_rounded),
                 label: const Text('Open web browser'),
               ),

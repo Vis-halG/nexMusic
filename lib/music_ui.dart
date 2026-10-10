@@ -37,6 +37,7 @@ import 'phone_services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
 
 part 'listening_ui.dart';
 part 'discovery_ui.dart';
@@ -1214,6 +1215,9 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
     final notice = context.select<MusicController, String?>(
       (music) => music.notice,
     );
+    final account = context.select<MusicController, Object>(
+      (music) => music.personal,
+    );
     if (notice != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -1228,7 +1232,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
     }
 
     final Widget currentView = switch (_currentTabIndex) {
-      1 => const _SpotifyStreamView(),
+      1 => _SpotifyStreamView(key: ObjectKey(account)),
       2 => const _SpotifyLibraryView(),
       3 => const ProfileScreen(showAppBar: false),
       _ => const _SpotifyHomeView(),
@@ -2138,7 +2142,7 @@ class _SpotifyBrowseCard extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _SpotifyStreamView extends StatefulWidget {
-  const _SpotifyStreamView();
+  const _SpotifyStreamView({super.key});
   @override
   State<_SpotifyStreamView> createState() => _SpotifyStreamViewState();
 }
@@ -2149,11 +2153,12 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
   int _request = 0;
   int _page = 1;
   bool _loading = false, _loadingMore = false, _hasMore = false;
-  String _category = 'Trending';
+  String _category = 'For you';
   List<Song> _songs = [], _quickPicks = [], _similar = [];
   String _similarTitle = '';
   List<String> _unavailable = [];
   static const _categories = [
+    'For you',
     'Trending',
     'Quick Picks',
     'Energize',
@@ -2183,9 +2188,15 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
 
   String get _query => _search.text.trim().isNotEmpty
       ? _search.text.trim()
-      : _category == 'Trending' || _category == 'Quick Picks'
+      : _category == 'For you' ||
+            _category == 'Trending' ||
+            _category == 'Quick Picks'
       ? ''
-      : '$_category songs';
+      : '${context.read<MusicController>().personal.settings.language == 'Any' || _category == 'Punjabi' || _category == 'Bollywood' ? '' : '${context.read<MusicController>().personal.settings.language} '}$_category songs';
+
+  bool get _personalized =>
+      _search.text.trim().isEmpty &&
+      (_category == 'For you' || _category == 'Quick Picks');
 
   Future<void> _load({bool more = false, bool refresh = false}) async {
     if (more &&
@@ -2195,7 +2206,9 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
     _debounce?.cancel();
     final request = ++_request;
     final music = context.read<MusicController>();
+    final account = music.personal;
     final query = _query;
+    final personalized = _personalized;
     final page = more ? _page + 1 : 1;
     if (refresh) music.discovery.clearCache();
     setState(() {
@@ -2208,19 +2221,32 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
       }
     });
     try {
-      final result = await music.discovery.browse(
-        query: more && query.isEmpty ? 'Trending Indian music' : query,
-        videos: false,
-        page: more && query.isEmpty ? page - 1 : page,
-        limit: 20,
-      );
-      if (!mounted || request != _request) return;
-      final home = query.isEmpty && !more;
+      final home = personalized && !more;
+      final sections = home
+          ? Future.wait<Object?>([
+              music.fetchQuickPicks(limit: 12),
+              music.fetchSimilarToLastPlayed(limit: 12),
+            ])
+          : null;
+      final result = personalized
+          ? MusicFeedResult(
+              await music.fetchPersonalizedStream(limit: 20, page: page),
+            )
+          : await music.discovery.browse(
+              query: more && query.isEmpty ? 'Trending Indian music' : query,
+              videos: false,
+              page: more && query.isEmpty ? page - 1 : page,
+              limit: 20,
+            );
+      if (!mounted || request != _request || account != music.personal) return;
       setState(() {
         final combined = mergeMusicResults([
           [..._songs, ...result.songs],
         ]);
-        _hasMore = result.songs.isNotEmpty && combined.length > _songs.length;
+        _hasMore =
+            result.songs.isNotEmpty &&
+            combined.length > _songs.length &&
+            (!personalized || result.songs.length == 20);
         _songs = combined.where(music.personal.accepts).toList();
         _unavailable = result.unavailable;
         _page = page;
@@ -2229,15 +2255,26 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
       });
       music.streamRandomTracks = List.of(_songs);
       music.library.rememberSongs(_songs);
-      if (home) {
-        final picks = await music.fetchQuickPicks(limit: 12);
-        final similar = await music.fetchSimilarToLastPlayed(limit: 12);
-        if (!mounted || request != _request) return;
+      if (sections != null) {
+        final loaded = await sections;
+        final picks = loaded[0] as List<Song>;
+        final similar =
+            loaded[1]
+                as ({
+                  String title,
+                  String artist,
+                  Song seedSong,
+                  List<Song> songs,
+                })?;
+        if (!mounted || request != _request || account != music.personal) {
+          return;
+        }
         setState(() {
           _quickPicks = picks;
           _similar = similar?.songs ?? [];
           _similarTitle = similar?.title ?? '';
         });
+        music.streamRandomTracks = mergeMusicResults([_songs, picks, _similar]);
       }
     } catch (_) {
       if (!mounted || request != _request) return;
@@ -2260,11 +2297,17 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
 
   @override
   Widget build(BuildContext context) {
+    final music = context.watch<MusicController>();
     final scheme = Theme.of(context).colorScheme;
-    final showHome = _search.text.trim().isEmpty && _category == 'Trending';
-    final tracks = _category == 'Quick Picks' && _search.text.trim().isEmpty
-        ? _quickPicks
-        : _songs;
+    final showHome = _search.text.trim().isEmpty && _category == 'For you';
+    final picks = _quickPicks.where(music.personal.accepts).toList();
+    final similar = _similar.where(music.personal.accepts).toList();
+    final tracks =
+        (_category == 'Quick Picks' && _search.text.trim().isEmpty
+                ? picks
+                : _songs)
+            .where(music.personal.accepts)
+            .toList();
     final artists = groupSongsByArtist(
       tracks,
     ).where((a) => !a.unknown).take(12).toList();
@@ -2414,7 +2457,7 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
                 child: Center(child: CircularProgressIndicator()),
               )
             else ...[
-              if (showHome && _quickPicks.isNotEmpty) ...[
+              if (showHome && picks.isNotEmpty) ...[
                 _heading('Quick Picks', 'Inspired by your listening'),
                 SizedBox(
                   height: 218,
@@ -2428,27 +2471,27 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
                           mainAxisSpacing: 12,
                           crossAxisSpacing: 4,
                         ),
-                    itemCount: _quickPicks.length,
-                    itemBuilder: (_, i) => _QuickPickTile(
-                      song: _quickPicks[i],
-                      queue: _quickPicks,
-                    ),
+                    itemCount: picks.length,
+                    itemBuilder: (_, i) =>
+                        _QuickPickTile(song: picks[i], queue: picks),
                   ),
                 ),
               ],
-              if (showHome && _similar.isNotEmpty)
+              if (showHome && similar.isNotEmpty)
                 _SpotifySection(
                   title: 'Similar to $_similarTitle',
                   subtitle: 'Recommendations across both providers',
-                  songs: _similar,
+                  songs: similar,
                 ),
               _heading(
                 _search.text.trim().isNotEmpty
                     ? 'Search results'
-                    : _category == 'Trending'
+                    : _category == 'For you'
                     ? 'Made for your next listen'
                     : _category,
-                'A mix from JioSaavn and YouTube Music',
+                _personalized
+                    ? 'Based on your favourites and listening'
+                    : 'A mix from JioSaavn and YouTube Music',
               ),
               if (tracks.isEmpty)
                 Padding(
@@ -3186,6 +3229,25 @@ Future<void> _songActions(BuildContext context, Song song) {
     context,
     title: song.title,
     (sheetContext) => [
+      if (song.isProvider && !song.isVideo && !kIsWeb)
+        ListTile(
+          leading: const Icon(Icons.cloud_upload_outlined),
+          title: const Text('Upload to Library'),
+          subtitle: const Text('Save the audio in a library category'),
+          onTap: () {
+            Navigator.pop(sheetContext);
+            if (music.uid == null) {
+              music.announce('Sign in with Google to upload songs.');
+              return;
+            }
+            if (music.uploading) {
+              music.announce('Wait for the current uploads to finish.');
+              return;
+            }
+            music.clearUploads();
+            _push(context, UploadScreen(streamSong: song));
+          },
+        ),
       ..._listeningSongActions(context, sheetContext, song),
       ListTile(
         leading: const Icon(Icons.radio_rounded, color: NexMusic.violet),
@@ -3441,8 +3503,10 @@ class UploadScreen extends StatefulWidget {
     super.key,
     this.initialPaths = const [],
     this.sharedLink,
+    this.streamSong,
   });
   final List<String> initialPaths;
+  final Song? streamSong;
 
   /// A YouTube link shared into nexMusic. The screen opens at once while a
   /// browser out of sight turns the link into audio, so the title and category
@@ -3461,11 +3525,18 @@ class _UploadScreenState extends State<UploadScreen> {
   final List<String> _rejected = [];
   String? _categoryId;
   SharedAudioJob? _job;
+  SongFilePreparation? _streamPreparation;
+  bool _streamBusy = false, _streamSubmitted = false;
+  double? _streamProgress;
+  String? _streamError;
+  int _streamRequest = 0;
+  late final Object _account;
 
   @override
   void initState() {
     super.initState();
     _music = context.read<MusicController>();
+    _account = _music.personal;
     for (final filePath in widget.initialPaths) {
       final file = File(filePath);
       _add(
@@ -3477,10 +3548,130 @@ class _UploadScreenState extends State<UploadScreen> {
     if (_picked.length == 1) _title.text = _picked.first.title;
     final link = widget.sharedLink;
     if (link != null) _startJob(link);
+    final streamSong = widget.streamSong;
+    if (streamSong != null) {
+      _title.text = streamSong.title.length > 160
+          ? streamSong.title.substring(0, 160)
+          : streamSong.title;
+      _artist.text = streamSong.artist.length > 160
+          ? streamSong.artist.substring(0, 160)
+          : streamSong.artist;
+      unawaited(_prepareStreamAudio());
+    }
+  }
+
+  Future<void> _prepareStreamAudio() async {
+    final song = widget.streamSong;
+    if (song == null || _streamBusy) return;
+    final request = ++_streamRequest;
+    setState(() {
+      _streamBusy = true;
+      _streamError = null;
+      _streamProgress = null;
+    });
+    PreparedSongFiles? prepared;
+    File? copy;
+    var retained = false;
+    try {
+      if (_music.uid == null) {
+        throw StateError('Sign in with Google to upload songs.');
+      }
+      if (_account != _music.personal) {
+        throw StateError('Your account changed. Open the song again.');
+      }
+      final preparation = _music.createAudioFilePreparation(
+        maxBytes: math.min(
+          maxUploadBytes - 1,
+          _music.personal.settings.storageBudgetMb * 1024 * 1024,
+        ),
+        onProgress: (_, _, _, fraction) {
+          if (mounted && request == _streamRequest) {
+            setState(() => _streamProgress = fraction);
+          }
+        },
+      );
+      _streamPreparation = preparation;
+      prepared = await preparation.prepare([song]);
+      if (!mounted ||
+          request != _streamRequest ||
+          _account != _music.personal) {
+        return;
+      }
+      final directory = await Directory(
+        path.join((await getTemporaryDirectory()).path, 'nexmusic_uploads'),
+      ).create(recursive: true);
+      final source = prepared.files.single;
+      copy = await File(source.path).copy(
+        path.join(
+          directory.path,
+          '${newMusicId()}${path.extension(source.path)}',
+        ),
+      );
+      if (!mounted ||
+          request != _streamRequest ||
+          _account != _music.personal) {
+        return;
+      }
+      final uploadCopy = copy;
+      setState(() {
+        final previousCount = _picked.length;
+        _add(
+          uploadCopy.path,
+          path.basename(source.path),
+          uploadCopy.lengthSync(),
+        );
+        if (_picked.length > previousCount) {
+          final item = _picked.last;
+          item.title = _title.text;
+          item.artist = _artist.text;
+          item.artistRead = true;
+          item.durationMs = song.durationMs;
+          retained = true;
+        }
+      });
+    } on SongShareCancelled {
+      if (mounted && request == _streamRequest) {
+        setState(() => _streamError = 'Audio preparation cancelled.');
+      }
+    } catch (error) {
+      if (mounted && request == _streamRequest) {
+        setState(() => _streamError = 'Could not prepare this song. $error');
+      }
+    } finally {
+      if (!retained && copy != null) await _deleteQuietlyUpload(copy);
+      await prepared?.dispose();
+      if (mounted && request == _streamRequest) {
+        _streamPreparation = null;
+        setState(() {
+          _streamBusy = false;
+          if (_account != _music.personal) {
+            _streamError = 'Your account changed. Open the song again.';
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _deleteQuietlyUpload(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
+  }
+
+  void _cancelStreamAudio() {
+    ++_streamRequest;
+    _streamPreparation?.cancel();
+    _streamPreparation = null;
+    setState(() {
+      _streamBusy = false;
+      _streamError = 'Audio preparation cancelled.';
+    });
   }
 
   @override
   void dispose() {
+    ++_streamRequest;
+    _streamPreparation?.cancel();
     final job = _job;
     if (job != null) {
       job.removeListener(_onJob);
@@ -3489,7 +3680,8 @@ class _UploadScreenState extends State<UploadScreen> {
     }
     // Picked files that were never uploaded leave copies in the cache. Clear
     // them only when no upload batch still needs its files.
-    if (_picked.isNotEmpty && _music.uploads.isEmpty) {
+    if (_picked.isNotEmpty &&
+        _picked.every((item) => !_music.uploads.contains(item))) {
       for (final item in _picked) {
         _music.discardPicked(item);
       }
@@ -3658,6 +3850,10 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   void _upload() {
+    if (widget.streamSong != null && _account != _music.personal) {
+      _music.announce('Your account changed. Open the song again.');
+      return;
+    }
     final categoryId = _categoryId;
     if (categoryId == null) return;
     final job = _job;
@@ -3688,6 +3884,7 @@ class _UploadScreenState extends State<UploadScreen> {
     if (_music.uploads.isNotEmpty &&
         identical(_music.uploads.first, items.first)) {
       setState(() {
+        _streamSubmitted = true;
         _picked.clear();
         _rejected.clear();
       });
@@ -3707,7 +3904,10 @@ class _UploadScreenState extends State<UploadScreen> {
   @override
   Widget build(BuildContext context) {
     final music = context.watch<MusicController>();
-    return music.uploads.isEmpty ? _pickerView(music) : _progressView(music);
+    return music.uploads.isEmpty ||
+            (widget.streamSong != null && !_streamSubmitted)
+        ? _pickerView(music)
+        : _progressView(music);
   }
 
   Widget _pickerView(MusicController music) {
@@ -3724,6 +3924,7 @@ class _UploadScreenState extends State<UploadScreen> {
     final requested = job?.uploadRequested ?? false;
     final ready =
         !requested &&
+        !_streamBusy &&
         music.categories.any((category) => category.id == _categoryId) &&
         (fetching ||
             (count > 0 && (count > 1 || _title.text.trim().isNotEmpty)));
@@ -3733,6 +3934,23 @@ class _UploadScreenState extends State<UploadScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
         children: [
+          if (widget.streamSong != null &&
+              (_streamBusy || _streamError != null)) ...[
+            Text(_streamError ?? 'Preparing audio for your Library...'),
+            const SizedBox(height: 8),
+            if (_streamBusy) LinearProgressIndicator(value: _streamProgress),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _streamBusy
+                    ? _cancelStreamAudio
+                    : _prepareStreamAudio,
+                icon: Icon(_streamBusy ? Icons.close : Icons.refresh),
+                label: Text(_streamBusy ? 'Cancel preparation' : 'Retry audio'),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           if (count == 0 && job != null)
             _FetchBox(job: job, onRetry: _retryJob, onBrowser: _openInBrowser)
           else
@@ -3743,7 +3961,7 @@ class _UploadScreenState extends State<UploadScreen> {
               detail: count == 0
                   ? 'Pick one or many · up to 100 MB each'
                   : 'Tap to add more',
-              onTap: _pickFiles,
+              onTap: _streamBusy ? () {} : _pickFiles,
               onClear: count == 0 ? null : _clear,
             ),
           for (final reason in _rejected)
@@ -3751,7 +3969,7 @@ class _UploadScreenState extends State<UploadScreen> {
               padding: const EdgeInsets.only(top: 6),
               child: Text(reason, style: TextStyle(color: error, fontSize: 12)),
             ),
-          if (count == 1 || fetching) ...[
+          if (count == 1 || fetching || _streamBusy) ...[
             const SizedBox(height: 20),
             TextField(
               controller: _title,
@@ -3796,7 +4014,7 @@ class _UploadScreenState extends State<UploadScreen> {
               style: TextStyle(color: muted, fontSize: 12),
             ),
           ],
-          if (count > 0) ...[
+          if (count > 0 || _streamBusy) ...[
             const SizedBox(height: 16),
             TextField(
               controller: _artist,
@@ -6541,8 +6759,10 @@ class NexBrowserScreen extends StatefulWidget {
     required this.sharedLink,
     this.pasteLink = '',
     this.job,
+    this.showCloudinaryStats = false,
   });
   final String sharedLink;
+  final bool showCloudinaryStats;
 
   /// When set, the browser runs out of sight for this job: it shows no
   /// controls or messages, and the finished file goes to the job instead of
@@ -8031,6 +8251,12 @@ class _NexBrowserScreenState extends State<NexBrowserScreen> {
             icon: const Icon(Icons.tune_rounded),
             onPressed: _showAdvancedControls,
           ),
+          if (widget.showCloudinaryStats)
+            IconButton(
+              tooltip: 'Cloudinary statistics',
+              icon: const Icon(Icons.query_stats_rounded),
+              onPressed: () => _push(context, const AdvanceScreen()),
+            ),
         ],
         bottom: _progress > 0 && _progress < 100
             ? PreferredSize(

@@ -32,6 +32,9 @@ class CloudinaryStatus {
       plan = json['plan'] as String?,
       lastUpdated = json['lastUpdated'] as String?,
       fetchedAt = DateTime.tryParse('${json['fetchedAt']}'),
+      cached = json['cached'] == true,
+      cacheExpiresAt = DateTime.tryParse('${json['cacheExpiresAt']}'),
+      manualRefreshAfter = DateTime.tryParse('${json['manualRefreshAfter']}'),
       mediaCount = _number(json['mediaCount'])?.toInt(),
       songCount = _number(json['songCount'])?.toInt(),
       otherMediaCount = _number(json['otherMediaCount'])?.toInt(),
@@ -49,6 +52,8 @@ class CloudinaryStatus {
   final String cloudName;
   final String? plan, lastUpdated;
   final DateTime? fetchedAt, adminResetAt;
+  final bool cached;
+  final DateTime? cacheExpiresAt, manualRefreshAfter;
   final int? mediaCount, songCount, otherMediaCount, accountResources, requests;
   final CloudinaryMetric storage, bandwidth, credits, transformations, adminApi;
 
@@ -75,6 +80,7 @@ class CloudinaryStatusService {
   Future<CloudinaryStatus> load({
     required String workerUrl,
     required String token,
+    bool refresh = false,
   }) async {
     final base = Uri.tryParse(workerUrl);
     if (base == null || base.scheme != 'https' || base.host.isEmpty) {
@@ -86,7 +92,11 @@ class CloudinaryStatusService {
       ..connectionTimeout = const Duration(seconds: 15);
     try {
       return await (() async {
-        final request = await client.getUrl(base.resolve('/cloudinary/status'));
+        final request = await client.getUrl(
+          base
+              .resolve('/cloudinary/status')
+              .replace(queryParameters: refresh ? {'refresh': '1'} : null),
+        );
         request.followRedirects = false;
         request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
         final response = await request.close();
