@@ -34,6 +34,9 @@ migrate_working_dir/
 /coverage/
 /tool/small_apk/node_modules/
 /test_backend/node_modules/
+/push_worker/.wrangler/
+/push_worker/.dev.vars*
+/push_worker/.env*
 /.firebase/
 
 # Build artifacts kept outside /build/, like the APK shared for testing
