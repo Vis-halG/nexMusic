@@ -2,11 +2,44 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
-      return request.auth != null;
+      return request.auth != null &&
+        (!exists(/databases/$(database)/documents/appUsers/$(request.auth.uid)) ||
+          get(/databases/$(database)/documents/appUsers/$(request.auth.uid)).data.blocked != true);
+    }
+
+    // A blocked client may read its own access status so it can sign out.
+    match /appUsers/{userId} {
+      allow get: if request.auth != null && request.auth.uid == userId;
+      allow write, list: if false;
+    }
+
+    function validSession(data) {
+      let id = data.lastDeviceId;
+      let session = data.sessions[id];
+      return data.keys().hasOnly(['sessions', 'lastDeviceId']) &&
+        id is string && id.matches('^[a-zA-Z0-9_-]{1,80}$') &&
+        data.sessions is map && data.sessions.size() <= 64 &&
+        session.keys().hasOnly(['signedIn', 'lastSeen']) &&
+        session.signedIn is bool && session.lastSeen == request.time;
+    }
+    match /appPresence/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && validSession(request.resource.data) && request.resource.data.sessions.size() == 1;
+      allow update: if isOwner(userId) && validSession(request.resource.data) &&
+        request.resource.data.sessions.diff(resource.data.sessions).affectedKeys().hasOnly([request.resource.data.lastDeviceId]);
+      allow delete, list: if false;
     }
 
     function isOwner(userId) {
       return signedIn() && request.auth.uid == userId;
+    }
+
+    // Shared activity contains public song metadata and aggregate counts only.
+    // The authenticated Worker writes counters atomically; identities and
+    // idempotency receipts in subcollections are never readable by clients.
+    match /globalMusic/{songId} {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     function validCategoryName(name) {
@@ -86,7 +119,7 @@ service cloud.firestore {
         && request.resource.data.token.size() > 0
         && request.resource.data.token.size() < 4096
         && request.resource.data.updatedAt == request.time;
-      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
     match /users/{userId}/folders/{folderId} {

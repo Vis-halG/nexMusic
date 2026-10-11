@@ -123,7 +123,7 @@ flutter {
 
 // nexMusic plays plain audio and video files. The audio and video plugins also
 // pull in ExoPlayer's streaming formats (DASH, HLS, RTSP, SmoothStreaming), so
-// leave them out to keep the APK under 10 MB. The app refuses streaming links
+// leave them out to reduce APK size. The app refuses streaming links
 // before they reach a player.
 configurations.configureEach {
     exclude(group = "androidx.media3", module = "media3-exoplayer-dash")

@@ -16,12 +16,14 @@ import 'package:video_player/video_player.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'app_update.dart';
+import 'admin_users.dart';
 import 'cloudinary_status.dart';
 import 'main.dart';
 import 'media_library.dart';
 import 'music_controller.dart';
 import 'music_data.dart';
 import 'music_discovery.dart';
+import 'music_recommendations.dart';
 import 'listening_models.dart';
 import 'music_downloads.dart';
 import 'music_lyrics.dart';
@@ -40,6 +42,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 
 part 'listening_ui.dart';
+part 'admin_ui.dart';
 part 'discovery_ui.dart';
 part 'social_ui.dart';
 part 'recognition_ui.dart';
@@ -691,6 +694,10 @@ class _Thumb extends StatelessWidget {
           : Image.network(
               imageUrl,
               fit: BoxFit.cover,
+              cacheWidth: (size * MediaQuery.devicePixelRatioOf(context))
+                  .ceil(),
+              cacheHeight: (size * MediaQuery.devicePixelRatioOf(context))
+                  .ceil(),
               errorBuilder: (_, _, _) => fallback,
             ),
     );
@@ -1050,6 +1057,9 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    context.read<MusicController>().accountForeground(
+      state == AppLifecycleState.resumed,
+    );
     if (state == AppLifecycleState.resumed) {
       _checkAutoUpdate();
     }
@@ -1209,6 +1219,10 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
   }
 
   int _currentTabIndex = 0;
+  var _streamKey = GlobalKey<_SpotifyStreamViewState>();
+  _SpotifyStreamView? _streamView;
+  Object? _streamAccount;
+  bool _streamVisited = false;
 
   @override
   Widget build(BuildContext context) {
@@ -1231,8 +1245,15 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
       });
     }
 
+    if (_streamAccount != account) {
+      _streamAccount = account;
+      _streamVisited = false;
+      _streamKey = GlobalKey<_SpotifyStreamViewState>();
+      _streamView = _SpotifyStreamView(key: _streamKey);
+    }
+    if (_currentTabIndex == 1) _streamVisited = true;
     final Widget currentView = switch (_currentTabIndex) {
-      1 => _SpotifyStreamView(key: ObjectKey(account)),
+      1 => const SizedBox.shrink(),
       2 => const _SpotifyLibraryView(),
       3 => const ProfileScreen(showAppBar: false),
       _ => const _SpotifyHomeView(),
@@ -1240,7 +1261,22 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
 
     return _SongSelectionScaffold(
       key: ValueKey(_currentTabIndex),
-      body: SafeArea(bottom: false, child: currentView),
+      body: SafeArea(
+        bottom: false,
+        child: Stack(
+          children: [
+            if (_currentTabIndex != 1) currentView,
+            if (_streamVisited)
+              Offstage(
+                offstage: _currentTabIndex != 1,
+                child: TickerMode(
+                  enabled: _currentTabIndex == 1,
+                  child: _streamView!,
+                ),
+              ),
+          ],
+        ),
+      ),
       floatingActionButton: _currentTabIndex < 3
           ? FloatingActionButton(
               tooltip: 'Play random',
@@ -1873,8 +1909,9 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
                             context,
                             SongListScreen(
                               title: 'Liked Songs',
-                              emptyText: 'No liked songs yet.',
-                              select: (m) => m.likedSongs,
+                              emptyText: 'No community likes yet.',
+                              select: (m) =>
+                                  m.communitySongs(MediaCollection.likedSongs),
                             ),
                           ),
                         ),
@@ -1888,9 +1925,10 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
                             context,
                             SongListScreen(
                               title: 'Recently Played',
-                              emptyText: 'Play a song to start your history.',
+                              emptyText:
+                                  'Community listening activity will appear here.',
                               select: (m) =>
-                                  m.librarySongs(MediaCollection.recent),
+                                  m.communitySongs(MediaCollection.recent),
                             ),
                           ),
                         ),
@@ -1915,9 +1953,9 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
                                 title: title,
                                 emptyText:
                                     collection == MediaCollection.mostPlayed
-                                    ? 'Your most played songs will appear here.'
+                                    ? 'The community’s most played songs will appear here.'
                                     : 'No unplayed songs available yet.',
-                                select: (m) => m.librarySongs(collection),
+                                select: (m) => m.communitySongs(collection),
                               ),
                             ),
                           ),
@@ -1980,13 +2018,14 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
               SliverToBoxAdapter(
                 child: _SpotifySection(
                   title: title,
-                  songs: music.librarySongs(collection),
+                  subtitle: 'Across all listeners',
+                  songs: music.communitySongs(collection),
                   onSeeAll: () => _push(
                     context,
                     SongListScreen(
                       title: title,
                       emptyText: 'Nothing here yet.',
-                      select: (m) => m.librarySongs(collection),
+                      select: (m) => m.communitySongs(collection),
                     ),
                   ),
                 ),
@@ -2149,6 +2188,10 @@ class _SpotifyStreamView extends StatefulWidget {
 
 class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
   final _search = TextEditingController();
+  final _scroll = ScrollController();
+  MusicTaste? _taste;
+  Set<String> _excluded = {};
+  String _feedKey = '';
   Timer? _debounce;
   int _request = 0;
   int _page = 1;
@@ -2183,6 +2226,7 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
     _request++;
     _debounce?.cancel();
     _search.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -2209,73 +2253,106 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
     final account = music.personal;
     final query = _query;
     final personalized = _personalized;
+    final feedKey = '$personalized:$query:$_category';
+    final changedFeed = _feedKey != feedKey;
     final page = more ? _page + 1 : 1;
     if (refresh) music.discovery.clearCache();
     setState(() {
       _loading = !more;
       _loadingMore = more;
       if (!more) {
-        _songs = [];
+        if (changedFeed) {
+          _songs = [];
+          _quickPicks = [];
+          _similar = [];
+          _similarTitle = '';
+          _unavailable = [];
+          if (_scroll.hasClients) _scroll.jumpTo(0);
+        }
+        _feedKey = feedKey;
+        _taste = personalized ? music.recommendationTaste() : null;
+        _excluded = {if (music.current != null) music.current!.id};
         _page = 1;
         _hasMore = false;
       }
     });
+    final familiar = personalized
+        ? await music.discovery.recommendationSeeds(
+            _taste!,
+            accepts: account.accepts,
+            limit: 3,
+          )
+        : <Song>[];
+    if (!mounted || request != _request || account != music.personal) return;
+    void publish(MusicFeedResult result, {bool complete = false}) {
+      if (!mounted || request != _request || account != music.personal) return;
+      final combined = mergeMusicResults([
+        [..._songs, ...result.songs],
+      ]).where(account.accepts).toList();
+      setState(() {
+        // Append completed providers without moving rows already on screen.
+        _songs = combined;
+        _unavailable = result.unavailable;
+        if (personalized && !more) {
+          _quickPicks = mergeMusicResults([
+            _songs,
+            familiar
+                .where((s) => s.isProvider && !_excluded.contains(s.id))
+                .toList(),
+          ], limit: 12);
+        }
+        if (complete) {
+          _hasMore =
+              result.songs.isNotEmpty &&
+              (!personalized || result.songs.length == 20);
+          _page = page;
+          _loading = false;
+          _loadingMore = false;
+        }
+      });
+      music.streamRandomTracks = mergeMusicResults([
+        _songs,
+        _quickPicks,
+        _similar,
+      ]);
+    }
+
     try {
       final home = personalized && !more;
-      final sections = home
-          ? Future.wait<Object?>([
-              music.fetchQuickPicks(limit: 12),
-              music.fetchSimilarToLastPlayed(limit: 12),
-            ])
-          : null;
+      if (home) {
+        unawaited(
+          music.fetchSimilarToLastPlayed(limit: 12).then((similar) {
+            if (!mounted || request != _request || account != music.personal) {
+              return;
+            }
+            setState(() {
+              _similar = similar?.songs ?? [];
+              _similarTitle = similar?.title ?? '';
+            });
+          }, onError: (Object _) {}),
+        );
+      }
       final result = personalized
           ? MusicFeedResult(
-              await music.fetchPersonalizedStream(limit: 20, page: page),
+              await music.fetchPersonalizedStream(
+                limit: 20,
+                page: page,
+                taste: _taste,
+                excludeIds: _excluded,
+                onUpdate: (songs) => publish(MusicFeedResult(songs)),
+              ),
             )
           : await music.discovery.browse(
               query: more && query.isEmpty ? 'Trending Indian music' : query,
               videos: false,
               page: more && query.isEmpty ? page - 1 : page,
               limit: 20,
+              onUpdate: (result) => publish(result),
             );
       if (!mounted || request != _request || account != music.personal) return;
-      setState(() {
-        final combined = mergeMusicResults([
-          [..._songs, ...result.songs],
-        ]);
-        _hasMore =
-            result.songs.isNotEmpty &&
-            combined.length > _songs.length &&
-            (!personalized || result.songs.length == 20);
-        _songs = combined.where(music.personal.accepts).toList();
-        _unavailable = result.unavailable;
-        _page = page;
-        _loading = false;
-        _loadingMore = false;
-      });
+      publish(result, complete: true);
       music.streamRandomTracks = List.of(_songs);
       music.library.rememberSongs(_songs);
-      if (sections != null) {
-        final loaded = await sections;
-        final picks = loaded[0] as List<Song>;
-        final similar =
-            loaded[1]
-                as ({
-                  String title,
-                  String artist,
-                  Song seedSong,
-                  List<Song> songs,
-                })?;
-        if (!mounted || request != _request || account != music.personal) {
-          return;
-        }
-        setState(() {
-          _quickPicks = picks;
-          _similar = similar?.songs ?? [];
-          _similarTitle = similar?.title ?? '';
-        });
-        music.streamRandomTracks = mergeMusicResults([_songs, picks, _similar]);
-      }
     } catch (_) {
       if (!mounted || request != _request) return;
       setState(() {
@@ -2297,7 +2374,17 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
 
   @override
   Widget build(BuildContext context) {
-    final music = context.watch<MusicController>();
+    final music = context.read<MusicController>();
+    context.select<MusicController, Object>((m) => m.personal);
+    context.select<MusicController, String>(
+      (m) => m.personal.settings.language,
+    );
+    context.select<MusicController, Set<String>>(
+      (m) => Set.of(m.personal.hiddenSongs),
+    );
+    context.select<MusicController, Set<String>>(
+      (m) => Set.of(m.personal.hiddenArtists),
+    );
     final scheme = Theme.of(context).colorScheme;
     final showHome = _search.text.trim().isEmpty && _category == 'For you';
     final picks = _quickPicks.where(music.personal.accepts).toList();
@@ -2313,7 +2400,7 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
     ).where((a) => !a.unknown).take(12).toList();
     return NotificationListener<ScrollNotification>(
       onNotification: (scrollInfo) {
-        if (scrollInfo.metrics.axis == Axis.vertical) {
+        if (scrollInfo.depth == 0 && scrollInfo.metrics.axis == Axis.vertical) {
           final metrics = scrollInfo.metrics;
           // Auto load more when scrolling within 450 pixels of the bottom
           if (metrics.maxScrollExtent > 0 &&
@@ -2330,208 +2417,231 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
       },
       child: RefreshIndicator(
         onRefresh: () => _load(refresh: true),
-        child: ListView(
+        child: CustomScrollView(
           key: const PageStorageKey('stream'),
+          controller: _scroll,
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.only(bottom: 28),
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 12, 12),
-              child: Row(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Column(
                 children: [
-                  const Icon(
-                    Icons.stream_rounded,
-                    color: NexMusic.violet,
-                    size: 30,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 20, 12, 12),
+                    child: Row(
                       children: [
-                        const Text(
-                          'Stream',
-                          style: TextStyle(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w700,
+                        const Icon(
+                          Icons.stream_rounded,
+                          color: NexMusic.violet,
+                          size: 30,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Stream',
+                                style: TextStyle(
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              Text(
+                                'JioSaavn + YouTube Music, together',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        Text(
-                          'JioSaavn + YouTube Music, together',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSurfaceVariant,
-                          ),
+                        IconButton(
+                          tooltip: 'Refresh streams',
+                          onPressed: () => _load(refresh: true),
+                          icon: const Icon(Icons.refresh_rounded),
                         ),
                       ],
                     ),
                   ),
-                  IconButton(
-                    tooltip: 'Refresh streams',
-                    onPressed: () => _load(refresh: true),
-                    icon: const Icon(Icons.refresh_rounded),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 8,
+                    ),
+                    child: TextField(
+                      controller: _search,
+                      onChanged: _onSearch,
+                      decoration: InputDecoration(
+                        hintText: 'Search both music providers',
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon: _search.text.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: 'Clear search',
+                                icon: const Icon(Icons.close_rounded),
+                                onPressed: () {
+                                  _search.clear();
+                                  _onSearch('');
+                                },
+                              ),
+                      ),
+                    ),
                   ),
+                  if (_search.text.trim().isEmpty)
+                    SizedBox(
+                      height: 48,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _categories.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 8),
+                        itemBuilder: (_, i) => ChoiceChip(
+                          label: Text(_categories[i]),
+                          selected: _category == _categories[i],
+                          onSelected: (_) {
+                            if (_category == _categories[i]) return;
+                            setState(() => _category = _categories[i]);
+                            _load();
+                          },
+                        ),
+                      ),
+                    ),
+                  if (artists.isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                      child: Text(
+                        'Browse by artist',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    SizedBox(
+                      height: 48,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        itemCount: artists.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 8),
+                        itemBuilder: (_, i) => ActionChip(
+                          avatar: const Icon(Icons.person_outline, size: 18),
+                          label: Text(artists[i].name),
+                          onPressed: () => _push(
+                            context,
+                            ArtistAlbumScreen(
+                              song: artists[i].tracks.first.copyWith(
+                                artist: artists[i].name,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (_unavailable.isNotEmpty && !_loading)
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Text(
+                        '${_unavailable.join(' and ')} unavailable. Pull down to retry.',
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    ),
+                  if (_loading && tracks.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(48),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else ...[
+                    if (showHome && picks.isNotEmpty) ...[
+                      _heading('Quick Picks', 'Inspired by your listening'),
+                      SizedBox(
+                        height: 218,
+                        child: GridView.builder(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 3,
+                                mainAxisExtent: 290,
+                                mainAxisSpacing: 12,
+                                crossAxisSpacing: 4,
+                              ),
+                          itemCount: picks.length,
+                          itemBuilder: (_, i) =>
+                              _QuickPickTile(song: picks[i], queue: picks),
+                        ),
+                      ),
+                    ],
+                    _heading(
+                      _search.text.trim().isNotEmpty
+                          ? 'Search results'
+                          : _category == 'For you'
+                          ? 'Made for your next listen'
+                          : _category,
+                      _personalized
+                          ? 'Based on your favourites and listening'
+                          : 'A mix from JioSaavn and YouTube Music',
+                    ),
+                    if (tracks.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Column(
+                          children: [
+                            const Icon(Icons.search_off_rounded, size: 40),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'No tracks available. Try another search or refresh.',
+                            ),
+                            TextButton(
+                              onPressed: () => _load(refresh: true),
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: TextField(
-                controller: _search,
-                onChanged: _onSearch,
-                decoration: InputDecoration(
-                  hintText: 'Search both music providers',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: _search.text.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: 'Clear search',
-                          icon: const Icon(Icons.close_rounded),
-                          onPressed: () {
-                            _search.clear();
-                            _onSearch('');
-                          },
-                        ),
-                ),
+            SliverList.builder(
+              itemCount: tracks.length,
+              itemBuilder: (_, index) => SongTile(
+                key: ValueKey(tracks[index].id),
+                song: tracks[index],
+                queue: tracks,
               ),
             ),
-            if (_search.text.trim().isEmpty)
-              SizedBox(
-                height: 48,
-                child: ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _categories.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 8),
-                  itemBuilder: (_, i) => ChoiceChip(
-                    label: Text(_categories[i]),
-                    selected: _category == _categories[i],
-                    onSelected: (_) {
-                      setState(() => _category = _categories[i]);
-                      _load();
-                    },
-                  ),
-                ),
-              ),
-            if (artists.isNotEmpty && !_loading) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
-                child: Text(
-                  'Browse by artist',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-              SizedBox(
-                height: 48,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  itemCount: artists.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 8),
-                  itemBuilder: (_, i) => ActionChip(
-                    avatar: const Icon(Icons.person_outline, size: 18),
-                    label: Text(artists[i].name),
-                    onPressed: () => _push(
-                      context,
-                      ArtistAlbumScreen(
-                        song: artists[i].tracks.first.copyWith(
-                          artist: artists[i].name,
+            SliverToBoxAdapter(
+              child: Column(
+                children: [
+                  if (showHome && similar.isNotEmpty)
+                    _SpotifySection(
+                      title: 'Similar to $_similarTitle',
+                      subtitle: 'Recommendations across both providers',
+                      songs: similar,
+                    ),
+                  if (_loadingMore || (_loading && tracks.isNotEmpty))
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Center(
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2.5),
                         ),
                       ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-            if (_unavailable.isNotEmpty && !_loading)
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Text(
-                  '${_unavailable.join(' and ')} unavailable. Pull down to retry.',
-                  style: TextStyle(color: scheme.onSurfaceVariant),
-                ),
-              ),
-            if (_loading)
-              const Padding(
-                padding: EdgeInsets.all(48),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else ...[
-              if (showHome && picks.isNotEmpty) ...[
-                _heading('Quick Picks', 'Inspired by your listening'),
-                SizedBox(
-                  height: 218,
-                  child: GridView.builder(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          mainAxisExtent: 290,
-                          mainAxisSpacing: 12,
-                          crossAxisSpacing: 4,
-                        ),
-                    itemCount: picks.length,
-                    itemBuilder: (_, i) =>
-                        _QuickPickTile(song: picks[i], queue: picks),
-                  ),
-                ),
-              ],
-              if (showHome && similar.isNotEmpty)
-                _SpotifySection(
-                  title: 'Similar to $_similarTitle',
-                  subtitle: 'Recommendations across both providers',
-                  songs: similar,
-                ),
-              _heading(
-                _search.text.trim().isNotEmpty
-                    ? 'Search results'
-                    : _category == 'For you'
-                    ? 'Made for your next listen'
-                    : _category,
-                _personalized
-                    ? 'Based on your favourites and listening'
-                    : 'A mix from JioSaavn and YouTube Music',
-              ),
-              if (tracks.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Column(
-                    children: [
-                      const Icon(Icons.search_off_rounded, size: 40),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'No tracks available. Try another search or refresh.',
+                    )
+                  else if (_hasMore && _category != 'Quick Picks')
+                    Center(
+                      child: TextButton.icon(
+                        onPressed: () => _load(more: true),
+                        icon: const Icon(Icons.expand_more),
+                        label: const Text('Load more'),
                       ),
-                      TextButton(
-                        onPressed: () => _load(refresh: true),
-                        child: const Text('Retry'),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                for (final song in tracks) SongTile(song: song, queue: tracks),
-              if (_loadingMore)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2.5),
                     ),
-                  ),
-                )
-              else if (_hasMore && _category != 'Quick Picks')
-                Center(
-                  child: TextButton.icon(
-                    onPressed: () => _load(more: true),
-                    icon: const Icon(Icons.expand_more),
-                    label: const Text('Load more'),
-                  ),
-                ),
-            ],
+                  const SizedBox(height: 28),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -2981,15 +3091,15 @@ class _SpotifyLibraryView extends StatelessWidget {
             style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
           ),
           subtitle: Text(
-            'Playlist · ${music.likedSongs.length} songs',
+            'Community · ${music.communitySongs(MediaCollection.likedSongs).length} songs',
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
           onTap: () => _push(
             context,
             SongListScreen(
               title: 'Liked Songs',
-              emptyText: 'Songs you like show up here.',
-              select: (m) => m.likedSongs,
+              emptyText: 'Songs liked by the community show up here.',
+              select: (m) => m.communitySongs(MediaCollection.likedSongs),
             ),
           ),
         ),
@@ -5617,6 +5727,13 @@ class ProfileScreen extends StatelessWidget {
           ),
         ),
         const Divider(),
+        if (music.isAdmin)
+          _NavRow(
+            icon: Icons.manage_accounts_outlined,
+            title: 'Manage users',
+            subtitle: 'Login activity, block and unblock accounts',
+            onTap: () => _push(context, const AdminUsersScreen()),
+          ),
         _NavRow(
           icon: Icons.cloud_upload_outlined,
           title: 'My uploads',

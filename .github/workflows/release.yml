@@ -31,6 +31,11 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       - name: Restore Firebase configurations
         run: |
           echo "${{ secrets.FIREBASE_OPTIONS_BASE64 }}" | base64 -d > lib/firebase_options.dart
@@ -43,6 +48,7 @@ jobs:
         run: |
           flutter analyze lib/
           flutter test
+          npm --prefix test_backend test
 
       - name: Extract version
         id: get_version
@@ -61,28 +67,28 @@ jobs:
           storeFile=nexmusic-release.jks
           EOF
 
-      - name: Build Android APKs
+      - name: Build one universal Android APK
         run: |
-          # 1. Build split per-ABI APKs for 32-bit and 64-bit phones.
-          flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/symbols --extra-gen-snapshot-options=--strip
-          # Save split outputs
-          mkdir -p split_outputs
-          cp build/app/outputs/flutter-apk/*.apk split_outputs/
-          # 2. Build universal phone APK (arm + arm64 only, excludes ~9MB of useless PC x86_64)
-          flutter build apk --release --target-platform android-arm,android-arm64 --obfuscate --split-debug-info=build/symbols --extra-gen-snapshot-options=--strip
+          flutter build apk --release --target-platform android-arm,android-arm64,android-x64 --obfuscate --split-debug-info=build/symbols --extra-gen-snapshot-options=--strip
+          npm ci --prefix tool/small_apk --no-audit --no-fund
+          mkdir -p build/optimized
+          node tool/small_apk/repack-apk.cjs build/app/outputs/flutter-apk/app-release.apk build/optimized/unsigned.apk 5
+          node tool/small_apk/sign-release.cjs build/optimized/unsigned.apk build/optimized/nexMusic.apk
+          # Compression must retain every supported architecture and app file.
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('build/app/outputs/flutter-apk/app-release.apk') as before, zipfile.ZipFile('build/optimized/nexMusic.apk') as after:
+              entries = lambda z: {i.filename: (i.CRC, i.file_size) for i in z.infolist() if not i.filename.upper().startswith('META-INF/')}
+              assert entries(before) == entries(after), 'APK contents changed during compression'
+              for abi in ['armeabi-v7a', 'arm64-v8a', 'x86_64']:
+                  assert f'lib/{abi}/libflutter.so' in after.namelist()
+                  assert f'lib/{abi}/libapp.so' in after.namelist()
+          PY
 
       - name: Prepare release assets
         run: |
           mkdir -p release_assets
-          # Dedicated 32-bit APK for Vivo Y3s and 32-bit ARM phones.
-          cp split_outputs/app-armeabi-v7a-release.apk release_assets/nexMusic-armeabi-v7a.apk
-          # Dedicated 64-bit APK for modern 64-bit ARM phones
-          cp split_outputs/app-arm64-v8a-release.apk release_assets/nexMusic-arm64-v8a.apk
-          # Universal APK
-          cp build/app/outputs/flutter-apk/app-release.apk release_assets/nexMusic-Universal.apk
-          # Default fallback
-          cp build/app/outputs/flutter-apk/app-release.apk release_assets/nexMusic.apk
-          cp build/app/outputs/flutter-apk/app-release.apk release_assets/app-release.apk
+          cp build/optimized/nexMusic.apk release_assets/nexMusic.apk
 
       - name: Verify packaged version and app label
         env:
@@ -111,9 +117,5 @@ jobs:
           generate_release_notes: true
           files: |
             release_assets/nexMusic.apk
-            release_assets/nexMusic-armeabi-v7a.apk
-            release_assets/nexMusic-arm64-v8a.apk
-            release_assets/nexMusic-Universal.apk
-            release_assets/app-release.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

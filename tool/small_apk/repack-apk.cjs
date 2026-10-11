@@ -57,7 +57,10 @@ function findEndOfCentralDirectory(buffer) {
     if (method === 8) {
       const raw = zlib.inflateRawSync(data);
       if (raw.length !== size || zlib.crc32(raw) !== crc) throw new Error(`CRC mismatch: ${name}`);
-      const smaller = Buffer.from(await deflateAsync(raw, { numiterations: iterations }));
+      if (size > 1000000) console.log(`Compressing ${name} (${Math.round(size / 1e6)} MB)`);
+      const smaller = iterations > 0
+        ? Buffer.from(await deflateAsync(raw, { numiterations: iterations }))
+        : zlib.deflateRawSync(raw, { level: 9 });
       if (smaller.length < data.length) data = smaller;
     } else if (method !== 0) {
       throw new Error(`Unsupported compression method ${method}: ${name}`);

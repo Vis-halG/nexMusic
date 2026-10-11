@@ -38,6 +38,7 @@ migrate_working_dir/
 /push_worker/.dev.vars*
 /push_worker/.env*
 /.firebase/
+/android/.kotlin/
 
 # Build artifacts kept outside /build/, like the APK shared for testing
 *.apk

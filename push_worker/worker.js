@@ -10,11 +10,13 @@
 // key). Keep it only in the Worker; never put it in the app.
 
 import { cloudinaryStatus } from './cloudinary_status.js';
+import { communityActivity } from './community_activity.js';
+import { adminUsers, accountAccess } from './admin_users.js';
 
 const GOOGLE_KEYS_URL =
   'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
 const SCOPES =
-  'https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/datastore';
+  'https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/identitytoolkit';
 
 let googleKeys = { keys: [], expiresAt: 0 };
 let accessToken = { token: '', expiresAt: 0 };
@@ -31,7 +33,8 @@ export default {
       return reply(fingerprints.length ? [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: 'com.thenex.nex_music', sha256_cert_fingerprints: fingerprints } }] : []);
     }
     const cloudinaryReport = request.method === 'GET' && url.pathname === '/cloudinary/status';
-    if (request.method !== 'POST' && !cloudinaryReport) {
+    const adminList = request.method === 'GET' && url.pathname === '/admin/users';
+    if (request.method !== 'POST' && !cloudinaryReport && !adminList) {
       return reply({ error: 'Use POST.' }, 405);
     }
     let account;
@@ -43,14 +46,29 @@ export default {
     const projectId = account.project_id;
 
     let senderUid;
+    let identity, idToken;
     try {
       const header = request.headers.get('Authorization') || '';
-      senderUid = await verifyIdToken(header.replace(/^Bearer\s+/i, ''), projectId);
+      idToken = header.replace(/^Bearer\s+/i, '');
+      identity = await verifyIdToken(idToken, projectId);
+      senderUid = identity.sub;
     } catch {
       return reply({ error: 'Sign in to nexMusic first.' }, 401);
     }
 
+    try {
+      const denied = await accountAccess(projectId, senderUid, idToken);
+      if (denied) return denied;
+    } catch { return reply({ error: 'Could not verify account access.' }, 503); }
+    if (url.pathname.startsWith('/admin/')) return adminUsers(request, {
+      identity, projectId, getToken: () => getAccessToken(account),
+    });
+
     if (cloudinaryReport) return cloudinaryStatus(env, { refresh: url.searchParams.get('refresh') === '1' });
+    if (url.pathname === '/community/activity') return communityActivity(request, {
+      projectId, uid: senderUid, getToken: () => getAccessToken(account),
+      cloudName: env.CLOUDINARY_CLOUD_NAME || 'j0fu6gju',
+    });
     if (url.pathname === '/recognize') return recognize(request, env, account, senderUid, url.searchParams.get('mode') === 'humming');
     if (url.pathname !== '/' && url.pathname !== '/notify') return reply({error:'Route not found.'},404);
 
@@ -151,12 +169,17 @@ async function verifyIdToken(idToken, projectId) {
     payload.iss !== `https://securetoken.google.com/${projectId}` ||
     typeof payload.sub !== 'string' ||
     !payload.sub ||
+    payload.sub.length > 128 ||
     !Number.isFinite(payload.exp) || payload.exp <= now ||
     !Number.isFinite(payload.iat) || payload.iat > now + 300
   ) {
     throw new Error('Invalid token claims');
   }
-  const jwk = (await getGoogleKeys()).find((key) => key.kid === header.kid);
+  let jwk = (await getGoogleKeys()).find((key) => key.kid === header.kid);
+  if (!jwk) {
+    googleKeys.expiresAt = 0;
+    jwk = (await getGoogleKeys()).find((key) => key.kid === header.kid);
+  }
   if (!jwk) throw new Error('Unknown signing key');
   const key = await crypto.subtle.importKey(
     'jwk',
@@ -172,7 +195,7 @@ async function verifyIdToken(idToken, projectId) {
     new TextEncoder().encode(`${headerPart}.${payloadPart}`),
   );
   if (!valid) throw new Error('Bad signature');
-  return payload.sub;
+  return payload;
 }
 
 async function getGoogleKeys() {

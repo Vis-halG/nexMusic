@@ -15,6 +15,17 @@ extension MusicListeningActions on MusicController {
       firestore: _firestore,
       legacy: _auth == null,
     )..addListener(notifyListeners);
+    community = CommunityActivity(
+      prefs: _prefs,
+      uid: account,
+      firestore: _firestore,
+      token: () async {
+        if (_accountUid != account) return null;
+        return _auth?.currentUser?.getIdToken();
+      },
+    )..addListener(notifyListeners);
+    community.seed(library.entries);
+    _startAccountAccess(account);
     if (_firestore != null && account != 'guest') {
       social = MusicSocial(firestore: _firestore, uid: account)
         ..addListener(notifyListeners);
@@ -28,6 +39,11 @@ extension MusicListeningActions on MusicController {
         liked.remove(song.id);
       }
       library.applyCloudLike(song, value);
+      community.like(
+        song,
+        value,
+        at: (personal.activity[song.id]?['likedAt'] as num?)?.toInt(),
+      );
       unawaited(
         _prefs.setStringList(_accountKey('likedSongIds'), liked.toList()),
       );
@@ -42,6 +58,7 @@ extension MusicListeningActions on MusicController {
           );
         }
       }
+      community.seed(library.entries);
     };
     downloads = MusicDownloads(
       prefs: _prefs,
@@ -127,6 +144,7 @@ extension MusicListeningActions on MusicController {
         if (song.isProvider) _recordStreamSong(song);
         library.recordSongPlay(song);
         personal.recordPlay(song);
+        community.play(song);
         duration = Duration(milliseconds: song.durationMs);
         _audioHandler?.mediaItem.add(_mediaItem(song));
         unawaited(phone?.setSessionActive(true));
@@ -382,6 +400,9 @@ extension MusicListeningActions on MusicController {
     streamRandomTracks = const [];
     _randomScope = null;
     final generation = ++_accountGeneration;
+    await _accessSubscription?.cancel();
+    _accessSubscription = null;
+    _presenceTimer?.cancel();
     await playback.stop();
     downloads
       ..removeListener(_downloadStateChanged)
@@ -390,7 +411,12 @@ extension MusicListeningActions on MusicController {
     personal
       ..removeListener(notifyListeners)
       ..dispose();
-    await social?.leave();
+    community
+      ..removeListener(notifyListeners)
+      ..dispose();
+    try {
+      await social?.leave().timeout(const Duration(seconds: 3));
+    } catch (_) {}
     social
       ?..removeListener(notifyListeners)
       ..dispose();
@@ -555,6 +581,9 @@ extension MusicListeningActions on MusicController {
     );
     library.setSongsLiked(tracks, value);
     personal.recordLikes(tracks, value);
+    for (final song in tracks) {
+      community.like(song, value);
+    }
     notifyListeners();
   }
 

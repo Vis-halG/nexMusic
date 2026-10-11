@@ -20,6 +20,33 @@ test('private activity and listening stats stay within the account',async () => 
   await assertFails(getDoc(doc(db('bob'),'users/alice/activity/track')));
   await assertFails(setDoc(doc(db('bob'),'users/alice/activity/track'),{song:{id:'track'}}));
 });
+
+test('presence is per-device and private; clients cannot spoof timestamps or change block state', async () => {
+  const alice=db('alice'), bob=db('bob');
+  const presence=doc(alice,'appPresence/alice');
+  await assertSucceeds(setDoc(presence,{lastDeviceId:'phone1',sessions:{phone1:{signedIn:true,lastSeen:serverTimestamp()}}}));
+  await assertSucceeds(setDoc(presence,{lastDeviceId:'phone2',sessions:{phone2:{signedIn:true,lastSeen:serverTimestamp()}}},{merge:true}));
+  await assertSucceeds(setDoc(presence,{lastDeviceId:'phone1',sessions:{phone1:{signedIn:false,lastSeen:serverTimestamp()}}},{merge:true}));
+  const sessions=(await getDoc(presence)).data().sessions;
+  if (!sessions.phone2.signedIn || sessions.phone1.signedIn) throw Error('One phone must not sign out another');
+  await assertFails(getDoc(doc(bob,'appPresence/alice')));
+  await assertFails(setDoc(presence,{lastDeviceId:'phone1',sessions:{phone1:{signedIn:true,lastSeen:Timestamp.fromMillis(Date.now()+60000)}}},{merge:true}));
+  await assertFails(setDoc(doc(alice,'appUsers/alice'),{blocked:false}));
+});
+
+test('a server block immediately denies shared and private data but permits reading own access status', async () => {
+  const alice=db('alice');
+  await setDoc(doc(alice,'users/alice/activity/song'),{song:{id:'song'},liked:true});
+  await env.withSecurityRulesDisabled(async context => {
+    await setDoc(doc(context.firestore(),'appUsers/alice'),{blocked:true,updatedAt:Date.now()});
+    await setDoc(doc(context.firestore(),'globalMusic/song'),{song:{id:'song'},likes:1,plays:1});
+  });
+  await assertSucceeds(getDoc(doc(alice,'appUsers/alice')));
+  await assertFails(getDoc(doc(alice,'globalMusic/song')));
+  await assertFails(getDoc(doc(alice,'users/alice/activity/song')));
+  await assertFails(setDoc(doc(alice,'appUsers/alice'),{blocked:false}));
+  await assertFails(getDoc(doc(db('bob'),'appUsers/alice')));
+});
 test('playlist ownership cannot be forged or changed and private reads require membership',async () => {
   await seed(); await assertFails(getDoc(doc(db('bob'),'playlists/playlist1')));
   await assertFails(setDoc(doc(db('bob'),'playlists/fake'),{...playlist(),id:'fake'}));

@@ -4,9 +4,9 @@ Flutter app for shared music, online songs and videos.
 Signed-in listeners can upload songs and videos into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.4+8027` has four tabs: Home, Stream, Library and Profile. Home
-groups songs and videos into recently played/watched, liked, most played and
-never played collections. Stream combines JioSaavn and YouTube Music with
+Version `0.4.5+8028` has four tabs: Home, Stream, Library and Profile. Home
+groups public songs and videos into global recently played/watched, liked,
+most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and artist browsing. Available music videos open from
 the song player. Library also groups songs by artist. Random Play uses every
 source on Home, online songs on Stream, and saved/library songs on Library.
@@ -16,6 +16,32 @@ completed plays, recent history and early skips. Several distinct seed artists
 drive song radio, with language affinity, recording de-duplication and artist
 variety in ranking. Cross-provider radio verifies the seed recording rather
 than blindly using the first search hit. Trending remains available separately.
+Slow providers publish results independently, existing rows remain visible on
+refresh, and switching tabs preserves the feed, search and scroll position.
+Large histories rank in a background isolate; song rows build lazily and
+thumbnail decoding follows the displayed size.
+
+Global collections use server-managed `globalMusic` aggregates. Authenticated
+activity batches count each listener's like once and use receipts to avoid
+double-counting retries. Existing public likes/history import when an updated
+account connects; private files and device paths stay out of shared metadata.
+Personal heart state and recommendation preferences remain account scoped.
+
+Only the verified **vishalgupta25980@gmail.com** account sees Profile →
+**Manage users**. The backend also checks that exact verified email. The panel
+lists registered accounts, per-device signed-in/online status, last login,
+last seen, search and block/unblock controls. Foreground sessions heartbeat
+every minute; online status expires after 150 seconds. Older app versions
+show their Firebase last login until they report presence after updating.
+Blocking denies cloud access, disables Firebase sign-in, revokes refresh
+sessions and signs out updated clients. The admin account cannot block itself.
+
+Each new release publishes **one `nexMusic.apk`** containing ARM 32-bit,
+ARM 64-bit and x86_64. Minimum Android is **7.0 (API 24)**, required by the
+current Flutter runtime. Recompression preserves every app file and feature;
+the APK is aligned, signed with the existing release key and verified. A
+universal build includes several native runtimes and translation libraries,
+so it cannot meet a 10 MB target with the current features.
 Stream → a song's **⋮ → Upload to Library** prepares its audio, fills in title
 and artist, and opens the existing category upload flow. Preparation supports
 progress, cancellation, retry, Wi-Fi-only downloads and the 100 MB upload cap.
@@ -222,6 +248,10 @@ app does not re-read the whole catalogue. Songs are soft-deleted
 | Firestore `categories/{id}` | `name`, `ownerUid`, `createdAt` | any signed-in user creates; creator renames/deletes |
 | Firestore `songs/{id}` | `title`, `kind`, `categoryId`, `url`, `publicId`, `sizeBytes`, `durationMs`, `ownerUid`, `ownerName`, `createdAt`, `updatedAt`, `deleted` | any signed-in user creates their own; anyone signed in can change `title`, `categoryId`, `deleted`, `updatedAt` |
 | Firestore `pushTokens/{id}` | `uid`, `token`, `updatedAt` | that phone's user; read by the push Worker |
+| Firestore `globalMusic/{id}` | public song metadata, global likes/plays/last played | authenticated Worker only; signed-in listeners read aggregate documents |
+| Firestore `globalMusic/{id}/listeners`, `/events` | private counter state and retry receipts | Worker only; clients cannot read or write |
+| Firestore `appUsers/{uid}` | server-managed blocked status | admin Worker only; user reads their own access status |
+| Firestore `appPresence/{uid}` | per-device signed-in state and server timestamps | that user only; admin Worker reads presence |
 | Cloudinary `nexmusic/…` | public upload files | unsigned preset |
 | Firestore `users/{uid}/folders`, `users/{uid}/media` | private library metadata | that user only |
 | Storage `users/{uid}/…` | private library files (Blaze only) | that user only |
@@ -337,7 +367,7 @@ lib/phone_services.dart    lock screen controls, widgets, notifications, push
 android/.../MainActivity.kt  trim/extract channel and widget launch actions
 android/.../NexPhone.kt    progress and activity notifications, native package version
 push_worker/worker.js      Cloudflare Worker that sends activity notifications
-tool/small_apk/            builds the small APK to share
+tool/small_apk/            compresses and signs the single universal APK
 .github/workflows/release.yml GitHub Actions pipeline that auto-builds & publishes APK releases
 firestore.rules            catalogue and private metadata rules
 storage.rules              private library file rules (Blaze only)
@@ -398,8 +428,8 @@ git push origin master
 #### Step 4: Automated GitHub Release (Hands-Off)
 Once pushed to `master`, GitHub Actions (`.github/workflows/release.yml`) automatically:
 - Reads the new version tag (e.g., `v0.2.9+4015`) from `pubspec.yaml`.
-- Builds optimized APKs (`nexMusic-arm64-v8a.apk`, `nexMusic-armeabi-v7a.apk`, `nexMusic-Universal.apk`, `nexMusic.apk`).
-- Signs the APKs with the release keystore.
+- Builds one optimized universal `nexMusic.apk` containing ARM32, ARM64 and x86_64.
+- Compresses, aligns and signs the APK with the existing release keystore, then verifies its contents and version.
 - Publishes a new GitHub Release with the tag `v0.2.9+4015` and marks it as **Latest**.
 
 #### Step 5: Verify on Device

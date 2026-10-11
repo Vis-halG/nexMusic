@@ -446,11 +446,12 @@ class PersonalMusic extends ChangeNotifier {
           if (song == null) continue;
           final local = activity[song.id] ?? {};
           final merged = {...remote, ...local};
-          if ((remote['likedAt'] as num? ?? 0) >
-              (local['likedAt'] as num? ?? -1)) {
+          final cloudLikeChanged =
+              (remote['likedAt'] as num? ?? 0) >
+              (local['likedAt'] as num? ?? -1);
+          if (cloudLikeChanged) {
             merged['liked'] = remote['liked'];
             merged['likedAt'] = remote['likedAt'];
-            onCloudLike?.call(song, remote['liked'] == true);
           }
           merged['lastPlayed'] = ((remote['lastPlayed'] as num? ?? 0).toInt())
               .clamp(
@@ -458,6 +459,9 @@ class PersonalMusic extends ChangeNotifier {
                 8640000000000000,
               );
           activity[song.id] = merged;
+          if (cloudLikeChanged) {
+            onCloudLike?.call(song, remote['liked'] == true);
+          }
         }
         onCloudActivity?.call();
         changed(sync: false);

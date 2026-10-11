@@ -17,7 +17,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_update.dart';
+import 'admin_users.dart';
 import 'cloudinary_status.dart';
+import 'community_activity.dart';
 import 'media_library.dart';
 import 'music_data.dart';
 import 'music_discovery.dart';
@@ -450,6 +452,11 @@ class MusicController extends ChangeNotifier {
   /// Device-local history and likes shared by music and video sources.
   late MediaLibrary library;
   late PersonalMusic personal;
+  late CommunityActivity community;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+  _accessSubscription;
+  Timer? _presenceTimer;
+  bool _accountForeground = true, _blockingSignOut = false;
   final MusicCatalog catalog = MusicCatalog();
   MusicSocial? social;
   late MusicDownloads downloads;
@@ -634,6 +641,111 @@ class MusicController extends ChangeNotifier {
   }
 
   String get profileEmail => _auth?.currentUser?.email?.trim() ?? '';
+  bool get isAdmin => isNexMusicAdmin(
+    profileEmail,
+    verified: _auth?.currentUser?.emailVerified == true,
+  );
+
+  Future<Map<String, dynamic>> adminRequest(
+    String route, {
+    Map<String, String> query = const {},
+    Map<String, dynamic>? body,
+  }) async {
+    if (!isAdmin) throw StateError('Administrator access required.');
+    final account = _auth?.currentUser;
+    final token = await account?.getIdToken();
+    if (token == null || _auth?.currentUser?.uid != account?.uid) {
+      throw StateError('Sign in again.');
+    }
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final url = Uri.https(
+        'nexmusic-push.vishalgupta25989.workers.dev',
+        route,
+        query,
+      );
+      final request = await client
+          .openUrl(body == null ? 'GET' : 'POST', url)
+          .timeout(const Duration(seconds: 15));
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      if (body != null) {
+        request.headers.contentType = ContentType.json;
+        request.write(jsonEncode(body));
+      }
+      final response = await request.close().timeout(
+        const Duration(seconds: 30),
+      );
+      final result =
+          jsonDecode(
+                await response
+                    .transform(utf8.decoder)
+                    .join()
+                    .timeout(const Duration(seconds: 15)),
+              )
+              as Map<String, dynamic>;
+      if (response.statusCode != 200) {
+        throw StateError(
+          result['error'] as String? ?? 'User management failed.',
+        );
+      }
+      if (account?.uid != _auth?.currentUser?.uid) {
+        throw StateError('Account changed.');
+      }
+      return result;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  void _startAccountAccess(String account) {
+    if (_firestore == null || account == 'guest') return;
+    _accessSubscription = _firestore
+        .collection('appUsers')
+        .doc(account)
+        .snapshots()
+        .listen((snapshot) {
+          if (_accountUid != account ||
+              snapshot.data()?['blocked'] != true ||
+              _blockingSignOut) {
+            return;
+          }
+          _blockingSignOut = true;
+          signedIn = false;
+          guestMode = false;
+          announce(
+            'Your NexMusic account has been blocked. Contact the administrator.',
+          );
+          unawaited(signOut().whenComplete(() => _blockingSignOut = false));
+        }, onError: (Object _) {});
+    unawaited(_presence(true));
+    _presenceTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      if (_accountForeground) unawaited(_presence(true));
+    });
+  }
+
+  void accountForeground(bool active) {
+    _accountForeground = active;
+    if (active) unawaited(_presence(true));
+  }
+
+  Future<void> _presence(bool value) async {
+    final uid = _auth?.currentUser?.uid;
+    if (uid == null || uid != _accountUid || _firestore == null) return;
+    var device = _prefs.getString('musicDeviceId');
+    if (device == null) {
+      device = newMusicId();
+      await _prefs.setString('musicDeviceId', device);
+    }
+    try {
+      await _firestore.collection('appPresence').doc(uid).set({
+        'lastDeviceId': device,
+        'sessions': {
+          device: {'signedIn': value, 'lastSeen': FieldValue.serverTimestamp()},
+        },
+      }, SetOptions(merge: true));
+    } catch (_) {}
+  }
 
   String get profileInitials {
     final words = profileName
@@ -1103,13 +1215,22 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
-    // The phone's push registration can only be removed while signed in.
-    await phone?.disablePush();
     await playback.stop();
+    await _presence(
+      false,
+    ).timeout(const Duration(seconds: 3), onTimeout: () {});
+    // The phone's push registration can only be removed while signed in.
+    try {
+      await phone?.disablePush().timeout(const Duration(seconds: 3));
+    } catch (_) {}
     unawaited(phone?.setSessionActive(false));
     _stopCatalog();
     if (_auth?.currentUser != null) {
-      if (!kIsWeb) await GoogleSignIn.instance.signOut();
+      if (!kIsWeb) {
+        try {
+          await GoogleSignIn.instance.signOut();
+        } catch (_) {}
+      }
       await _auth!.signOut();
     }
     signedIn = false;
@@ -1333,14 +1454,20 @@ class MusicController extends ChangeNotifier {
   Future<List<Song>> fetchPersonalizedStream({
     int limit = 20,
     int page = 1,
+    MusicTaste? taste,
+    Set<String>? excludeIds,
+    void Function(List<Song>)? onUpdate,
   }) async {
     final account = personal;
     final tracks = await discovery.recommendations(
-      recommendationTaste(),
+      taste ?? recommendationTaste(),
       accepts: account.accepts,
       limit: limit,
       page: page,
-      excludeIds: {if (current != null) current!.id},
+      excludeIds: excludeIds ?? {if (current != null) current!.id},
+      onUpdate: (songs) {
+        if (account == personal) onUpdate?.call(songs);
+      },
     );
     if (account != personal) return [];
     library.rememberSongs(tracks);
@@ -1354,8 +1481,13 @@ class MusicController extends ChangeNotifier {
     final taste = recommendationTaste();
     final tracks = await fetchPersonalizedStream(limit: limit);
     if (account != personal) return [];
-    final familiar = taste
-        .seeds(accepts: personal.accepts, limit: math.max(1, limit ~/ 4))
+    final seeds = await discovery.recommendationSeeds(
+      taste,
+      accepts: personal.accepts,
+      limit: math.max(1, limit ~/ 4),
+    );
+    if (account != personal) return [];
+    final familiar = seeds
         .where((s) => s.isProvider && s.id != current?.id)
         .toList();
     final picks = mergeMusicResults([tracks, familiar], limit: limit);
@@ -1380,6 +1512,7 @@ class MusicController extends ChangeNotifier {
     );
     library.setSongLiked(song, liked.contains(song.id));
     personal.recordLike(song, liked.contains(song.id));
+    community.like(song, liked.contains(song.id));
     notifyListeners();
   }
 
@@ -1394,9 +1527,15 @@ class MusicController extends ChangeNotifier {
     return library.collection(collection).map((item) => item.song).toList();
   }
 
+  List<Song> communitySongs(MediaCollection collection) => community
+      .collection(collection, catalogue: [...songs, ...providerSongs])
+      .where(personal.accepts)
+      .toList();
+
   void recordVideoPlay(Song song) {
     library.recordSongPlay(song);
     personal.recordPlay(song);
+    community.play(song);
   }
 
   void toggleShuffle() {
@@ -3077,6 +3216,11 @@ class MusicController extends ChangeNotifier {
 
   @override
   void dispose() {
+    unawaited(_accessSubscription?.cancel());
+    _presenceTimer?.cancel();
+    community
+      ..removeListener(notifyListeners)
+      ..dispose();
     _uploadsDisposed = true;
     _uploadRecovery.dispose();
     unawaited(_uploadNetwork?.cancel());

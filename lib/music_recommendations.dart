@@ -2,37 +2,66 @@ import 'dart:math' as math;
 
 import 'music_data.dart';
 
+final _spaces = RegExp(r'\s+');
+final _musicPunctuation = RegExp(r'[^a-z0-9\u00c0-\uffff]+');
+final _presentationLabels = RegExp(
+  r'\b(?:official\s+(?:music\s+)?(?:video|audio)|music\s+video|lyric(?:s|al)?(?:\s+video)?|audio\s+only)\b',
+  caseSensitive: false,
+);
+final _fromLabel = RegExp(r'\(from\s+[^)]*\)', caseSensitive: false);
+final _topicLabel = RegExp(r'\s*-\s*topic\s*$', caseSensitive: false);
+final _artistSeparator = RegExp(
+  r'\s*(?:,|&|;|\bfeat\.?|\bft\.?|\bfeaturing\b)\s*',
+  caseSensitive: false,
+);
+
 String normalizeMusicText(String value) => value
     .toLowerCase()
     .replaceAll('&', ' and ')
-    .replaceAll(RegExp(r'[^a-z0-9\u00c0-\uffff]+'), ' ')
+    .replaceAll(_musicPunctuation, ' ')
     .trim()
-    .replaceAll(RegExp(r'\s+'), ' ');
+    .replaceAll(_spaces, ' ');
 
 /// Ignore presentation labels, but preserve remix/live/acoustic versions.
 String recordingTitle(String value) => normalizeMusicText(
-  value
-      .replaceAll(
-        RegExp(
-          r'\b(?:official\s+(?:music\s+)?(?:video|audio)|music\s+video|lyric(?:s|al)?(?:\s+video)?|audio\s+only)\b',
-          caseSensitive: false,
-        ),
-        '',
-      )
-      .replaceAll(RegExp(r'\(from\s+[^)]*\)', caseSensitive: false), ''),
+  value.replaceAll(_presentationLabels, '').replaceAll(_fromLabel, ''),
 );
 
 Set<String> musicArtists(String value) => value
-    .replaceAll(RegExp(r'\s*-\s*topic\s*$', caseSensitive: false), '')
-    .split(
-      RegExp(
-        r'\s*(?:,|&|;|\bfeat\.?|\bft\.?|\bfeaturing\b)\s*',
-        caseSensitive: false,
-      ),
-    )
+    .replaceAll(_topicLabel, '')
+    .split(_artistSeparator)
     .map(normalizeMusicText)
     .where((a) => a.isNotEmpty && a != 'unknown' && a != 'unknown artist')
     .toSet();
+
+/// Recording lookups avoid re-parsing an entire library for every candidate.
+class MusicRecordingIndex<T> {
+  MusicRecordingIndex(this.songOf);
+  final Song Function(T) songOf;
+  final _rows = <Object, Set<T>>{};
+  Iterable<Object> _keys(Song song) sync* {
+    yield ('id', song.id);
+    if (song.sourceId.isNotEmpty) {
+      yield ('source', song.kind, song.providerId, song.sourceId);
+    }
+    final title = recordingTitle(song.title);
+    if (title.isNotEmpty) {
+      for (final artist in musicArtists(song.artist)) {
+        yield ('recording', song.kind, title, artist);
+      }
+    }
+  }
+
+  void add(T row) {
+    for (final key in _keys(songOf(row))) {
+      (_rows[key] ??= {}).add(row);
+    }
+  }
+
+  Set<T> matches(Song song) => {for (final key in _keys(song)) ...?_rows[key]};
+
+  bool contains(Song song) => _keys(song).any(_rows.containsKey);
+}
 
 bool sameMusicRecording(Song a, Song b) {
   if (a.id == b.id) return true;
@@ -124,9 +153,15 @@ class MusicTaste {
   }) : preferences = history
            .where((p) => !p.song.isVideo && !p.song.isLongform)
            .toList(),
-       now = now ?? DateTime.now() {
+       now = now ?? DateTime.now();
+
+  bool _prepared = false;
+  void _prepare() {
+    if (_prepared) return;
+    _prepared = true;
     for (final preference in preferences) {
-      final weight = preference.weight(this.now);
+      _history.add(preference);
+      final weight = preference.weight(now);
       if (weight <= 0) continue;
       for (final artist in musicArtists(preference.song.artist)) {
         artists.update(artist, (v) => v + weight, ifAbsent: () => weight);
@@ -140,6 +175,7 @@ class MusicTaste {
   final String language;
   final DateTime now;
   final Map<String, double> artists = {}, languages = {}, genres = {};
+  final _history = MusicRecordingIndex<MusicPreference>((p) => p.song);
 
   static void _add(Map<String, double> values, String key, double weight) {
     final normalized = normalizeMusicText(key);
@@ -158,11 +194,15 @@ class MusicTaste {
   }
 
   List<Song> seeds({required bool Function(Song) accepts, int limit = 5}) {
+    final weights = {for (final p in preferences) p: p.weight(now)};
+    final artistKeys = {
+      for (final p in preferences) p: musicArtists(p.song.artist),
+    };
     final remaining = preferences
         .where(
           (p) =>
               accepts(p.song) &&
-              p.weight(now) > 0 &&
+              weights[p]! > 0 &&
               (p.song.isProvider || musicArtists(p.song.artist).isNotEmpty),
         )
         .toList();
@@ -170,17 +210,25 @@ class MusicTaste {
     final usedArtists = <String, int>{};
     while (remaining.isNotEmpty && result.length < limit) {
       double score(MusicPreference p) =>
-          p.weight(now) /
+          weights[p]! /
           (1 +
-              musicArtists(
-                    p.song.artist,
-                  ).fold(0, (n, a) => math.max(n, usedArtists[a] ?? 0)) *
+              artistKeys[p]!.fold(
+                    0,
+                    (n, a) => math.max(n, usedArtists[a] ?? 0),
+                  ) *
                   2);
-      remaining.sort((a, b) {
-        final order = score(b).compareTo(score(a));
-        return order != 0 ? order : b.lastPlayed.compareTo(a.lastPlayed);
-      });
-      final song = remaining.removeAt(0).song;
+      var best = 0;
+      var bestScore = score(remaining.first);
+      for (var i = 1; i < remaining.length; i++) {
+        final value = score(remaining[i]);
+        if (value > bestScore ||
+            (value == bestScore &&
+                remaining[i].lastPlayed > remaining[best].lastPlayed)) {
+          best = i;
+          bestScore = value;
+        }
+      }
+      final song = remaining.removeAt(best).song;
       if (result.any((s) => sameMusicRecording(s, song))) continue;
       result.add(song);
       for (final artist in musicArtists(song.artist)) {
@@ -191,6 +239,7 @@ class MusicTaste {
   }
 
   List<String> get fallbackQueries {
+    _prepare();
     final ranked = artists.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     final queries = ranked.take(2).map((a) => a.key).toList();
@@ -215,32 +264,40 @@ class MusicTaste {
     int? limit,
   }) {
     if (limit != null && limit <= 0) return [];
-    final pool = <({Song song, double score, int order})>[];
+    _prepare();
+    final pool =
+        <
+          ({
+            Song song,
+            double score,
+            int order,
+            Set<String> artists,
+            String album,
+          })
+        >[];
+    final recordings = MusicRecordingIndex<Song>((s) => s);
     final seen = <String>{};
     var order = 0;
     for (final song in candidates) {
       final index = order++;
+      final known = _history.matches(song);
       if (song.isVideo ||
           song.isLongform ||
           !accepts(song) ||
           excludeIds.contains(song.id) ||
           !seen.add(song.id) ||
           (seed != null && sameMusicRecording(seed, song)) ||
-          preferences.any(
-            (p) => !accepts(p.song) && sameMusicRecording(p.song, song),
-          ) ||
-          pool.any((p) => sameMusicRecording(p.song, song))) {
+          known.any((p) => !accepts(p.song)) ||
+          recordings.contains(song)) {
         continue;
       }
-      final known = preferences
-          .where((p) => sameMusicRecording(p.song, song))
-          .toList();
       // Repeated early skips exclude the recording across both catalogues.
       if (known.any((p) => !p.liked && p.skips >= 2 && p.weight(now) < 0)) {
         continue;
       }
       var score = 16 / (1 + index * 0.04);
-      score += 12 * _affinity(artists, musicArtists(song.artist));
+      final songArtists = musicArtists(song.artist);
+      score += 12 * _affinity(artists, songArtists);
       score += 7 * _affinity(languages, [normalizeMusicText(song.language)]);
       score += 4 * _affinity(genres, [normalizeMusicText(song.genre)]);
       if (language != 'Any' && song.language.isNotEmpty) {
@@ -271,13 +328,29 @@ class MusicTaste {
           song.durationMs > 900000) {
         score -= 14;
       }
-      pool.add((song: song, score: score, order: index));
+      pool.add((
+        song: song,
+        score: score,
+        order: index,
+        artists: songArtists,
+        album: normalizeMusicText(song.album),
+      ));
+      recordings.add(song);
     }
     final result = <Song>[];
     final artistCounts = <String, int>{}, albumCounts = <String, int>{};
     while (pool.isNotEmpty && (limit == null || result.length < limit)) {
-      double adjusted(({Song song, double score, int order}) p) {
-        final keys = musicArtists(p.song.artist);
+      double adjusted(
+        ({
+          Song song,
+          double score,
+          int order,
+          Set<String> artists,
+          String album,
+        })
+        p,
+      ) {
+        final keys = p.artists;
         final repeated = keys.fold(
           0,
           (n, a) => math.max(n, artistCounts[a] ?? 0),
@@ -285,23 +358,30 @@ class MusicTaste {
         final consecutive =
             result.isNotEmpty &&
             keys.intersection(musicArtists(result.last.artist)).isNotEmpty;
-        final album = normalizeMusicText(p.song.album);
+        final album = p.album;
         return p.score -
             repeated * 7 -
             (consecutive ? 10 : 0) -
             (album.isEmpty ? 0 : (albumCounts[album] ?? 0) * 3);
       }
 
-      pool.sort((a, b) {
-        final comparison = adjusted(b).compareTo(adjusted(a));
-        return comparison != 0 ? comparison : a.order.compareTo(b.order);
-      });
-      final song = pool.removeAt(0).song;
+      var best = 0;
+      var bestScore = adjusted(pool[0]);
+      for (var i = 1; i < pool.length; i++) {
+        final score = adjusted(pool[i]);
+        if (score > bestScore ||
+            (score == bestScore && pool[i].order < pool[best].order)) {
+          best = i;
+          bestScore = score;
+        }
+      }
+      final selected = pool.removeAt(best);
+      final song = selected.song;
       result.add(song);
-      for (final artist in musicArtists(song.artist)) {
+      for (final artist in selected.artists) {
         artistCounts.update(artist, (n) => n + 1, ifAbsent: () => 1);
       }
-      final album = normalizeMusicText(song.album);
+      final album = selected.album;
       if (album.isNotEmpty) {
         albumCounts.update(album, (n) => n + 1, ifAbsent: () => 1);
       }

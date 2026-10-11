@@ -4,8 +4,19 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:nex_music/main.dart';
 import 'package:nex_music/music_controller.dart';
+import 'package:nex_music/music_data.dart';
 import 'package:nex_music/music_ui.dart';
-import 'music_discovery_test.dart' show FakeMusicProvider, track;
+import 'music_discovery_test.dart' show FakeMusicProvider;
+
+Song track(String provider, String id, {String kind = 'audio'}) => Song(
+  id: 'provider:$provider:$id',
+  providerId: provider,
+  sourceId: id,
+  title: id,
+  artist: 'Artist',
+  kind: kind,
+  url: '',
+);
 
 void main() {
   testWidgets('four tabs remain and Stream combines both catalogues', (
