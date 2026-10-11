@@ -111,7 +111,11 @@ class NexAudioHandler extends BaseAudioHandler with SeekHandler {
           MediaControl.skipToPrevious,
           if (playing) MediaControl.pause else MediaControl.play,
           MediaControl.skipToNext,
-          MediaControl.stop,
+          const MediaControl(
+            androidIcon: 'drawable/ic_player_close',
+            label: 'Close player',
+            action: MediaAction.stop,
+          ),
         ],
         systemActions: const {
           MediaAction.seek,

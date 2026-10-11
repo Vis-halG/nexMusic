@@ -210,7 +210,10 @@ extension MusicListeningActions on MusicController {
       ?..onPlay = playback.resume
       ..onPause = pauseAudio
       ..onSeek = seek
-      ..onStop = playback.stop
+      ..onStop = () async {
+        await playback.stop();
+        await phone?.setSessionActive(false);
+      }
       ..onPlayMediaId = (id) async {
         final song = songById(id);
         if (song != null) await play(song, from: allMusic);

@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.view.KeyEvent
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
@@ -70,6 +71,27 @@ object NexPhone {
         )
     }
 
+    /** A loaded session receives controls without bringing the activity forward. */
+    fun playerControlIntent(context: Context, action: String, requestCode: Int): PendingIntent {
+        if (action == "stop") {
+            return PendingIntent.getBroadcast(context, requestCode,
+                Intent(context, WidgetCloseReceiver::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        }
+        if (!sessionActive) return openAppIntent(context, action, requestCode)
+        val keyCode = when (action) {
+            "previous" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            "next" -> KeyEvent.KEYCODE_MEDIA_NEXT
+            else -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+        }
+        val intent = Intent(context, com.ryanheise.audioservice.MediaButtonReceiver::class.java).apply {
+            this.action = Intent.ACTION_MEDIA_BUTTON
+            putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        }
+        return PendingIntent.getBroadcast(context, requestCode, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
+
     fun handle(context: Context, call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "showProgress" -> notify(context, call, TRANSFERS_CHANNEL, ongoing = true)
@@ -79,7 +101,13 @@ object NexPhone {
             "updateWidgets" -> {
                 MusicWidget.save(context,call.argument<String>("data") ?: "{}")
             }
-            "setSessionActive" -> sessionActive = call.argument<Boolean>("active") == true
+            "setSessionActive" -> {
+                val active = call.argument<Boolean>("active") == true
+                if (sessionActive != active) {
+                    sessionActive = active
+                    MusicWidget.refresh(context)
+                }
+            }
             "releaseUri" -> releaseUri(context, call.argument<String>("uri"))
             "readMediaArtist" -> {
                 val filePath = call.argument<String>("path") ?: ""

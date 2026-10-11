@@ -1092,6 +1092,8 @@ class MusicController extends ChangeNotifier {
         'title': song.title,
         'subtitle': song.isPrivate
             ? 'Private library'
+            : song.artist.isNotEmpty
+            ? song.artist
             : categoryName(song.categoryId),
       };
       final song = current;
@@ -1103,6 +1105,7 @@ class MusicController extends ChangeNotifier {
           ? null
           : queue[(index + 1) % queue.length].title;
       final data = jsonEncode({
+        'darkMode': darkMode,
         'latest': [for (final item in songs.take(3)) row(item)],
         'recent': [for (final item in recentSongs.take(3)) row(item)],
         'liked': [for (final item in likedSongs.take(3)) row(item)],

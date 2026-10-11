@@ -4,7 +4,7 @@ Flutter app for shared music, online songs and videos.
 Signed-in listeners can upload songs and videos into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.5+8028` has four tabs: Home, Stream, Library and Profile. Home
+Version `0.4.6+8029` has four tabs: Home, Stream, Library and Profile. Home
 groups public songs and videos into global recently played/watched, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and artist browsing. Available music videos open from
@@ -189,7 +189,17 @@ Personal playlists, queue editing/restore, repeat modes, sleep timer, lyrics/tra
   phones are notified when someone uploads, edits, moves or deletes a song or
   category (see "Activity notifications"). Profile → Activity notifications
   turns them off on one phone.
-- Android home music widget: now playing, previous/play/next and three liked or recent shortcuts.
+- Android home widgets: **nexMusic Player** is a compact pill-shaped player
+  with adjustable width;
+  **nexMusic music** also has three liked/recent shortcuts. Both follow the
+  app's saved Light/Dark theme, with white/black backgrounds and matching
+  text/icons. Previous, play/pause, next and close fill the available width.
+  A loaded session receives widget controls without opening the app; a cold
+  start opens the app to restore the saved queue. Resize by long-pressing a
+  placed widget and dragging the launcher handles.
+- The playback notification uses a **cross** for Close player. Android 13+
+  arranges media controls itself from the playback state; that system panel
+  cannot be forced into the widget's full-width button row.
 - Any song or video can be downloaded from its ⋮ menu and then plays from the
   phone without internet (Profile → Downloads). A download is removed when
   its uploader deletes the song.
