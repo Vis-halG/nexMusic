@@ -669,6 +669,7 @@ class PlaylistScreen extends StatelessWidget {
                     child: Text('Add songs from their ⋮ menu or search.'),
                   )
                 : ReorderableListView.builder(
+                    padding: const EdgeInsets.only(bottom: 80),
                     itemCount: p.tracks.length,
                     buildDefaultDragHandles: false,
                     onReorderItem: (oldIndex, newIndex) {
@@ -1192,6 +1193,7 @@ class MusicDownloadsScreen extends StatelessWidget {
         ],
       ),
       body: ListView(
+        padding: const EdgeInsets.only(bottom: 80),
         children: [
           if (manager.waitingMessage != null || manager.paused)
             ListTile(
@@ -1685,6 +1687,7 @@ class DeviceMusicScreen extends StatelessWidget {
               ),
             )
           : ListView(
+              padding: const EdgeInsets.only(bottom: 80),
               children: [
                 for (final folder
                     in tracks

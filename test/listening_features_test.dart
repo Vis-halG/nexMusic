@@ -93,6 +93,34 @@ void main() {
       music.dispose();
     },
   );
+  test('random play from a list shuffles only that list', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final music = MusicController(
+      prefs,
+      player: _PlaybackFake(),
+      musicProvider: _HeaderProvider(),
+    );
+    music.personal.settings.values['gapless'] = false;
+    music.personal.settings.values['crossfade'] = false;
+    music.songs = [song('elsewhere')];
+    final list = [
+      song('a'),
+      song('b'),
+      song('a'),
+      song('clip').copyWith(kind: 'video'),
+    ];
+    await music.playRandomFrom(list, random: Random(1));
+    expect(music.playback.queue.tracks.map((s) => s.id).toSet(), {'a', 'b'});
+    expect(music.playback.queue.shuffled, true);
+    expect(['a', 'b'], contains(music.current?.id));
+    final first = music.current!.id;
+    await music.playRandomFrom(list, random: Random(1));
+    expect(music.current?.id, isNot(first));
+    await music.playRandomFrom([song('clip').copyWith(kind: 'video')]);
+    expect(music.notice, 'No playable songs here.');
+    music.dispose();
+  });
   test(
     'play after completion restarts from the beginning, while an idle saved queue resumes its position',
     () async {

@@ -261,16 +261,47 @@ extension MusicListeningActions on MusicController {
     return {
       for (final song in candidates.where(
         (s) =>
-            !s.isVideo &&
-            !s.isLongform &&
-            (scope != MusicRandomScope.stream || s.isProvider) &&
-            (!s.url.startsWith('device:') || s.isPrivate) &&
-            (!personal.settings.downloadedOnly ||
-                s.isLocal ||
-                isSongDownloaded(s)),
+            _randomPlayable(s) &&
+            (scope != MusicRandomScope.stream || s.isProvider),
       ))
         song.id: song,
     }.values.toList();
+  }
+
+  /// Audio a shuffle button may pick on this phone right now.
+  bool _randomPlayable(Song s) =>
+      !s.isVideo &&
+      !s.isLongform &&
+      (!s.url.startsWith('device:') || s.isPrivate) &&
+      (!personal.settings.downloadedOnly || s.isLocal || isSongDownloaded(s));
+
+  /// Starts a random track from one screen's [songs], with the rest shuffled.
+  Future<void> playRandomFrom(List<Song> songs, {math.Random? random}) async {
+    final pool = {
+      for (final song in songs.where(_randomPlayable)) song.id: song,
+    }.values.toList();
+    if (pool.isEmpty) {
+      announce(
+        personal.settings.downloadedOnly
+            ? 'Downloaded-only mode is on. Download songs here or turn the mode off.'
+            : 'No playable songs here.',
+      );
+      return;
+    }
+    await _playRandomTrack(pool, random: random);
+  }
+
+  Future<void> _playRandomTrack(
+    List<Song> pool, {
+    math.Random? random,
+    MusicRandomScope? scope,
+  }) async {
+    final choices = pool.length > 1
+        ? pool.where((s) => s.id != current?.id).toList()
+        : pool;
+    final selected = choices[(random ?? math.Random()).nextInt(choices.length)];
+    playback.queue.setShuffle(true);
+    await play(selected, from: pool, randomScope: scope);
   }
 
   Future<void> playRandom(MusicRandomScope scope, {math.Random? random}) async {
@@ -287,12 +318,7 @@ extension MusicListeningActions on MusicController {
       );
       return;
     }
-    final choices = pool.length > 1
-        ? pool.where((s) => s.id != current?.id).toList()
-        : pool;
-    final selected = choices[(random ?? math.Random()).nextInt(choices.length)];
-    playback.queue.setShuffle(true);
-    await play(selected, from: pool, randomScope: scope);
+    await _playRandomTrack(pool, random: random, scope: scope);
   }
 
   List<MusicArtistCategory> get artistCategories => groupSongsByArtist(

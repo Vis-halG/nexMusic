@@ -236,6 +236,7 @@ class _MusicDiscoveryScreenState extends State<MusicDiscoveryScreen> {
             Padding(padding: const EdgeInsets.all(16), child: Text(error!)),
           Expanded(
             child: ListView.builder(
+              padding: const EdgeInsets.only(bottom: 80),
               itemCount: tracks.length,
               itemBuilder: (_, i) =>
                   _discoveryTile(context, tracks[i], tracks, explain: true),
@@ -461,6 +462,7 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
           ),
         Expanded(
           child: ListView.builder(
+            padding: const EdgeInsets.only(bottom: 80),
             itemCount: tracks.length,
             itemBuilder: (_, i) => _discoveryTile(context, tracks[i], tracks),
           ),

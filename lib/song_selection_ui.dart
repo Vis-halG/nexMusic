@@ -66,6 +66,17 @@ class _SongSelectionHostState extends State<_SongSelectionHost> {
     super.dispose();
   }
 
+  /// Song lists get the shell's random-play button, limited to their songs.
+  Widget? _shuffleButton(List<Song>? songs) =>
+      songs == null || !songs.any((s) => !s.isVideo)
+      ? null
+      : FloatingActionButton(
+          tooltip: 'Play random',
+          onPressed: () =>
+              unawaited(context.read<MusicController>().playRandomFrom(songs)),
+          child: const Icon(Icons.shuffle_rounded),
+        );
+
   @override
   Widget build(BuildContext context) => ChangeNotifierProvider.value(
     value: selection,
@@ -104,7 +115,7 @@ class _SongSelectionHostState extends State<_SongSelectionHost> {
             body: config.body,
             floatingActionButton: selection.active
                 ? null
-                : config.floatingActionButton,
+                : config.floatingActionButton ?? _shuffleButton(config.songs),
             bottomNavigationBar: selection.active
                 ? Column(
                     mainAxisSize: MainAxisSize.min,

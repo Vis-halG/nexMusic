@@ -5918,7 +5918,7 @@ class SongListScreen extends StatelessWidget {
               subtitle: emptyText,
             )
           : ListView.builder(
-              padding: const EdgeInsets.only(bottom: 24),
+              padding: const EdgeInsets.only(bottom: 80),
               itemCount: songs.length,
               itemBuilder: (_, i) => SongTile(song: songs[i], queue: songs),
             ),
