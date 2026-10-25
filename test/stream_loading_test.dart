@@ -104,7 +104,7 @@ void main() {
       );
       final search = find.widgetWithText(
         TextField,
-        'Search both music providers',
+        'Search songs and artists',
       );
       await tester.enterText(search, 'My query');
       await tester.pump(const Duration(milliseconds: 600));

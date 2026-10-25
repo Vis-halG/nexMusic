@@ -2460,6 +2460,7 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
   static const _categories = [
     'For you',
     'Trending',
+    'Artists',
     'Quick Picks',
     'Energize',
     'Relax',
@@ -2491,13 +2492,17 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
       ? _search.text.trim()
       : _category == 'For you' ||
             _category == 'Trending' ||
+            _category == 'Artists' ||
             _category == 'Quick Picks'
       ? ''
       : '${context.read<MusicController>().personal.settings.language == 'Any' || _category == 'Punjabi' || _category == 'Bollywood' ? '' : '${context.read<MusicController>().personal.settings.language} '}$_category songs';
 
+  // Artists lists the people in the For you feed.
   bool get _personalized =>
       _search.text.trim().isEmpty &&
-      (_category == 'For you' || _category == 'Quick Picks');
+      (_category == 'For you' ||
+          _category == 'Artists' ||
+          _category == 'Quick Picks');
 
   Future<void> _load({bool more = false, bool refresh = false}) async {
     if (more &&
@@ -2652,7 +2657,9 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
                 : _songs)
             .where(music.personal.accepts)
             .toList();
-    final artists = _artistsIn(tracks);
+    final artists = _search.text.trim().isEmpty && _category == 'Artists'
+        ? _artistsIn(tracks)
+        : null;
     return NotificationListener<ScrollNotification>(
       onNotification: (scrollInfo) {
         if (scrollInfo.depth == 0 && scrollInfo.metrics.axis == Axis.vertical) {
@@ -2690,7 +2697,7 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
                     controller: _search,
                     onChanged: _onSearch,
                     decoration: InputDecoration(
-                      hintText: 'Search both music providers',
+                      hintText: 'Search songs and artists',
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: _search.text.isEmpty
                           ? null
@@ -2716,18 +2723,6 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
                       _load();
                     },
                   ),
-                if (artists.isNotEmpty) ...[
-                  _heading('Artists', 'Everyone in this feed'),
-                  _ArtistsGrid(
-                    artists: artists,
-                    onOpen: (artist) => _push(
-                      context,
-                      ArtistAlbumScreen(
-                        song: artist.tracks.first.copyWith(artist: artist.name),
-                      ),
-                    ),
-                  ),
-                ],
                 if (_unavailable.isNotEmpty && !_loading)
                   Padding(
                     padding: const EdgeInsets.all(20),
@@ -2777,14 +2772,33 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
               ],
             ),
           ),
-          SliverList.builder(
-            itemCount: tracks.length,
-            itemBuilder: (_, index) => SongTile(
-              key: ValueKey(tracks[index].id),
-              song: tracks[index],
-              queue: tracks,
+          if (artists != null)
+            SliverList.builder(
+              itemCount: artists.length,
+              itemBuilder: (_, index) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _ArtistTile(
+                  artist: artists[index],
+                  onTap: () => _push(
+                    context,
+                    ArtistAlbumScreen(
+                      song: artists[index].tracks.first.copyWith(
+                        artist: artists[index].name,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverList.builder(
+              itemCount: tracks.length,
+              itemBuilder: (_, index) => SongTile(
+                key: ValueKey(tracks[index].id),
+                song: tracks[index],
+                queue: tracks,
+              ),
             ),
-          ),
           SliverToBoxAdapter(
             child: Column(
               children: [
@@ -2882,15 +2896,19 @@ class _ReorderableChipsState extends State<_ReorderableChips> {
     final music = context.read<MusicController>();
     final key = '${widget.orderKey}:${music.personal.uid}';
     final saved = music.preferences.getStringList(key) ?? const <String>[];
-    final place = {for (var i = 0; i < saved.length; i++) saved[i]: i};
-    final defaults = widget.chips;
-    int rank(int i) => place[defaults[i].$1] ?? saved.length + i;
-    final chips = [
-      for (final i in [
-        for (var i = 0; i < defaults.length; i++) i,
-      ]..sort((a, b) => rank(a).compareTo(rank(b))))
-        defaults[i],
+    final defaults = {for (final chip in widget.chips) chip.$1: chip};
+    final ids = [
+      for (final id in saved)
+        if (defaults.containsKey(id)) id,
     ];
+    // A chip added after the order was saved goes right after the chip it
+    // follows by default.
+    final order = defaults.keys.toList();
+    for (var i = 0; i < order.length; i++) {
+      if (ids.contains(order[i])) continue;
+      ids.insert(i == 0 ? 0 : ids.indexOf(order[i - 1]) + 1, order[i]);
+    }
+    final chips = [for (final id in ids) defaults[id]!];
     return SizedBox(
       height: 48,
       child: ReorderableListView.builder(
@@ -2971,20 +2989,7 @@ class _QuickPicksGrid extends StatelessWidget {
   );
 }
 
-/// Every artist in a list, laid out like Quick Picks.
-class _ArtistsGrid extends StatelessWidget {
-  const _ArtistsGrid({required this.artists, required this.onOpen});
-  final List<MusicArtistCategory> artists;
-  final void Function(MusicArtistCategory artist) onOpen;
-
-  @override
-  Widget build(BuildContext context) => _SidewaysGrid(
-    count: artists.length,
-    itemBuilder: (_, i) =>
-        _ArtistTile(artist: artists[i], onTap: () => onOpen(artists[i])),
-  );
-}
-
+/// An artist row: round cover, name, song count and a play button.
 class _ArtistTile extends StatelessWidget {
   const _ArtistTile({required this.artist, required this.onTap});
   final MusicArtistCategory artist;
