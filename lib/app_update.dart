@@ -13,7 +13,7 @@ import 'music_transfer.dart';
 import 'phone_services.dart';
 
 /// Fallback installed version of nexMusic (matches pubspec.yaml).
-const String currentAppVersion = '0.4.9+8032';
+const String currentAppVersion = '0.4.10+8033';
 
 class AppUpdateInfo {
   const AppUpdateInfo({

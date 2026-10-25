@@ -91,6 +91,8 @@ class _SongSelectionHostState extends State<_SongSelectionHost> {
             }
           },
           child: Scaffold(
+            // Pages scroll on behind the floating mini player.
+            extendBody: config.bottomNavigationBar != null,
             appBar: selection.active
                 ? AppBar(
                     leading: IconButton(

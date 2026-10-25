@@ -10,6 +10,7 @@
 // key). Keep it only in the Worker; never put it in the app.
 
 import { cloudinaryStatus } from './cloudinary_status.js';
+import { cloudinaryNames } from './cloudinary_names.js';
 import { communityActivity } from './community_activity.js';
 import { adminUsers, accountAccess } from './admin_users.js';
 
@@ -65,6 +66,7 @@ export default {
     });
 
     if (cloudinaryReport) return cloudinaryStatus(env, { refresh: url.searchParams.get('refresh') === '1' });
+    if (url.pathname === '/cloudinary/names') return cloudinaryNames(request, env);
     if (url.pathname === '/community/activity') return communityActivity(request, {
       projectId, uid: senderUid, getToken: () => getAccessToken(account),
       cloudName: env.CLOUDINARY_CLOUD_NAME || 'j0fu6gju',

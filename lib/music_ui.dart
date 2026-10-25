@@ -2356,7 +2356,9 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
               ),
             ),
 
-          const SliverToBoxAdapter(child: SizedBox(height: 80)),
+          SliverToBoxAdapter(
+            child: SizedBox(height: 80 + _behindBars(context)),
+          ),
         ],
       ],
     );
@@ -2802,7 +2804,7 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
                       label: const Text('Load more'),
                     ),
                   ),
-                const SizedBox(height: 28),
+                SizedBox(height: 80 + _behindBars(context)),
               ],
             ),
           ),
@@ -2814,6 +2816,11 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
   Widget _heading(String title, String subtitle) =>
       _feedHeading(context, title, subtitle);
 }
+
+/// Height of the mini player and bottom bar that a page scrolls on behind,
+/// so its last row can still come up above them.
+double _behindBars(BuildContext context) =>
+    MediaQuery.paddingOf(context).bottom;
 
 /// The big icon and title at the top of the Stream and Library tabs.
 class _TabTitle extends StatelessWidget {
@@ -3610,7 +3617,7 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
           itemCount: tracks.length,
           itemBuilder: (_, i) => SongTile(song: tracks[i], queue: tracks),
         ),
-        const SliverToBoxAdapter(child: SizedBox(height: 88)),
+        SliverToBoxAdapter(child: SizedBox(height: 88 + _behindBars(context))),
       ],
     );
   }
@@ -3901,6 +3908,52 @@ Future<void> _deleteCategory(
     );
   }
   await music.deleteCategory(category, withSongs: count > 0);
+}
+
+/// Owner tool: removes track numbers from titles and names the Cloudinary
+/// files after their songs. The progress dialog stays until it finishes.
+Future<void> _cleanUpSongNames(BuildContext context) async {
+  final music = context.read<MusicController>();
+  final titles = music.songsWithTrackNumbers.length;
+  final files = music.cloudinarySongs.length;
+  final confirmed = await _confirm(
+    context,
+    title: 'Clean up song names?',
+    body:
+        '${titles == 0 ? 'No titles start with a track number.' : 'The track number is removed from $titles song title${titles == 1 ? '' : 's'} for everyone.'} '
+        'Then all $files files on Cloudinary are named after their songs.',
+    action: 'Clean up',
+  );
+  if (!confirmed || !context.mounted) return;
+  final progress = ValueNotifier<double>(0);
+  final navigator = Navigator.of(context);
+  unawaited(
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('Cleaning up song names'),
+          content: ValueListenableBuilder<double>(
+            valueListenable: progress,
+            builder: (context, value, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                LinearProgressIndicator(value: value),
+                const SizedBox(height: 12),
+                Text('${(value * 100).round()}% · Keep the app open.'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await music.cleanUpSongNames(onProgress: (done) => progress.value = done);
+  navigator.pop();
+  progress.dispose();
 }
 
 /// Every category with its song count. Anyone can rename or delete any of
@@ -4246,7 +4299,7 @@ class _UploadScreenState extends State<UploadScreen> {
       _rejected.add('$name · $reason');
       return;
     }
-    final title = name.replaceAll(RegExp(r'\.[^.]+$'), '');
+    final title = withoutTrackNumber(name.replaceAll(RegExp(r'\.[^.]+$'), ''));
     _picked.add(
       UploadItem(
         path: filePath,
@@ -6085,7 +6138,10 @@ class ProfileScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final music = context.watch<MusicController>();
     final content = ListView(
-      padding: EdgeInsets.only(top: showAppBar ? 0 : 16, bottom: 32),
+      padding: EdgeInsets.only(
+        top: showAppBar ? 0 : 16,
+        bottom: 32 + _behindBars(context),
+      ),
       children: [
         if (!showAppBar)
           const Padding(
@@ -6138,6 +6194,12 @@ class ProfileScreen extends StatelessWidget {
             title: 'Manage users',
             subtitle: 'Login activity, block and unblock accounts',
             onTap: () => _push(context, const AdminUsersScreen()),
+          ),
+        if (music.isOwnerAdmin)
+          _NavRow(
+            icon: Icons.drive_file_rename_outline,
+            title: 'Clean up song names',
+            onTap: () => _cleanUpSongNames(context),
           ),
         _NavRow(
           icon: Icons.cloud_upload_outlined,
@@ -6251,7 +6313,7 @@ class ProfileScreen extends StatelessWidget {
       ],
     );
     if (!showAppBar) {
-      return SafeArea(child: content);
+      return SafeArea(bottom: false, child: content);
     }
     return Scaffold(
       appBar: AppBar(title: const Text('You')),
@@ -6326,7 +6388,7 @@ class SongListScreen extends StatelessWidget {
               subtitle: emptyText,
             )
           : ListView.builder(
-              padding: const EdgeInsets.only(bottom: 80),
+              padding: EdgeInsets.only(bottom: 80 + _behindBars(context)),
               itemCount: songs.length,
               itemBuilder: (_, i) => SongTile(song: songs[i], queue: songs),
             ),
@@ -6366,6 +6428,7 @@ class _PrivateLibraryScreenState extends State<PrivateLibraryScreen> {
         ? music.savedMedia
         : music.savedMedia.where((item) => item.folderId == selected).toList();
     return Scaffold(
+      extendBody: true,
       appBar: AppBar(
         title: const Text('Private library'),
         actions: [
@@ -6414,7 +6477,7 @@ class _PrivateLibraryScreenState extends State<PrivateLibraryScreen> {
                         'Save links or keep your own files here. Only you can see them.',
                   )
                 : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 24),
+                    padding: EdgeInsets.only(bottom: 24 + _behindBars(context)),
                     itemCount: items.length,
                     itemBuilder: (context, i) => _PrivateTile(item: items[i]),
                   ),
@@ -7213,7 +7276,7 @@ class SharedAudioJob extends ChangeNotifier {
     }
     final named = request.title.isNotEmpty
         ? request.title
-        : name.replaceAll(RegExp(r'\.[^.]+$'), '');
+        : withoutTrackNumber(name.replaceAll(RegExp(r'\.[^.]+$'), ''));
     final item = UploadItem(
       path: path,
       name: name,

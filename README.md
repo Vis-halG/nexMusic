@@ -4,7 +4,7 @@ Flutter app for shared music, online songs and videos.
 Signed-in listeners can upload songs and videos into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.9+8032` has four tabs: Home, Stream, Library and Profile. Home
+Version `0.4.10+8033` has four tabs: Home, Stream, Library and Profile. Home
 groups public songs and videos into global recently played/watched, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and artist browsing. Available music videos open from
@@ -109,6 +109,13 @@ The preset has no format or size restriction yet, so anyone who extracts it from
 the APK could upload to the account. The app itself only sends audio or video
 under 100 MB. Deleting a song in the app removes it from everyone's list; the
 file stays on Cloudinary until it is removed from the Media Library.
+
+Unsigned uploads cannot set a Media Library name, so after each upload or
+rename the app sends the song title to the push Worker's `/cloudinary/names`
+route, which sets the file's display name with the account's API secret. The
+file's public id and link never change. Titles made from file names lose a
+leading track number such as `07 ` or `220200`. Profile → **Clean up song
+names** (owner account only) does both for every existing song.
 
 Profile → **Advance** opens Cloudinary reporting: audio/media counts in the
 `nexmusic` folder, account storage, remaining reported limits, rolling 30-day

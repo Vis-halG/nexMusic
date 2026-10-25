@@ -113,6 +113,16 @@ String? uploadKindFor(String fileName) {
   return null;
 }
 
+/// [title] without the track number many downloaded files start with, such
+/// as "07 ", "1 20 " or a six-digit "220200" stuck to the name. Returns
+/// [title] unchanged if nothing else would be left.
+String withoutTrackNumber(String title) {
+  final cleaned = title.replaceFirst(_trackNumber, '').trim();
+  return cleaned.isEmpty ? title.trim() : cleaned;
+}
+
+final _trackNumber = RegExp(r'^\s*(?:\d{6}(?=\D)|(?:\d{1,3}[\s._\-–—:)]+)+)');
+
 /// Returns the first YouTube link in shared text, or null if there is none.
 String? youtubeLinkIn(String text) {
   final match = RegExp(r'https?://\S+').firstMatch(text);
@@ -2210,7 +2220,9 @@ class MusicController extends ChangeNotifier {
         throw const _UploadFailure('Files over 100 MB cannot be uploaded.');
       }
       var title = item.title.trim();
-      if (title.isEmpty) title = path.basenameWithoutExtension(item.name);
+      if (title.isEmpty) {
+        title = withoutTrackNumber(path.basenameWithoutExtension(item.name));
+      }
       if (title.length > 160) title = title.substring(0, 160);
 
       // The same title and size already in the catalogue is a duplicate.
@@ -2326,12 +2338,9 @@ class MusicController extends ChangeNotifier {
         ..title = existingRow?['title'] as String? ?? title
         ..status = UploadStatus.done
         ..progress = 1;
-      if (item.artist.isNotEmpty) {
-        setSongArtist(
-          songs.firstWhere((song) => song.id == reference.id),
-          item.artist,
-        );
-      }
+      final saved = songs.firstWhere((song) => song.id == reference.id);
+      if (item.artist.isNotEmpty) setSongArtist(saved, item.artist);
+      unawaited(_nameOnCloudinary([saved]));
       _uploadRecovery.clear(reset: true);
       discardPicked(item);
     } catch (error) {
@@ -2521,6 +2530,123 @@ class MusicController extends ChangeNotifier {
     _scheduleCatalogSave();
   }
 
+  /// Uploads whose titles start with a track number.
+  List<Song> get songsWithTrackNumbers => [
+    for (final song in songs)
+      if (song.publicId != null && withoutTrackNumber(song.title) != song.title)
+        song,
+  ];
+
+  /// Uploads stored on Cloudinary, which can be named after their songs.
+  List<Song> get cloudinarySongs => [
+    for (final song in songs)
+      if (song.publicId?.startsWith('nexmusic/') == true) song,
+  ];
+
+  /// Owner tool: removes the track number from every title, then names each
+  /// file in the Cloudinary Media Library after its song. [onProgress] gets
+  /// the finished share from 0 to 1.
+  Future<void> cleanUpSongNames({
+    void Function(double done)? onProgress,
+  }) async {
+    final firestore = _firestore;
+    if (!isOwnerAdmin || firestore == null) return;
+    // The rules only accept edits of songs whose category still exists.
+    final renamed = [
+      for (final song in songsWithTrackNumbers)
+        if (categoryById(song.categoryId) != null) song,
+    ];
+    final total = math.max(1, renamed.length + cloudinarySongs.length);
+    try {
+      for (var start = 0; start < renamed.length; start += 200) {
+        final batch = renamed.sublist(
+          start,
+          math.min(start + 200, renamed.length),
+        );
+        final writes = firestore.batch();
+        for (final song in batch) {
+          writes.update(firestore.collection('songs').doc(song.id), {
+            'title': withoutTrackNumber(song.title),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+        await writes.commit();
+        _editSongs({
+          for (final song in batch) song.id,
+        }, (song) => song.copyWith(title: withoutTrackNumber(song.title)));
+        onProgress?.call((start + batch.length) / total);
+      }
+    } on FirebaseException catch (error) {
+      notice = _firebaseMessage(error, operation: 'Title clean-up');
+      notifyListeners();
+      return;
+    }
+    final files = cloudinarySongs;
+    final named = await _nameOnCloudinary(
+      files,
+      onProgress: (sent) => onProgress?.call((renamed.length + sent) / total),
+    );
+    notice = [
+      if (renamed.isNotEmpty)
+        'Removed track numbers from ${renamed.length} title${renamed.length == 1 ? '' : 's'}.',
+      named == files.length
+          ? 'Named all ${files.length} files on Cloudinary.'
+          : 'Named $named of ${files.length} files on Cloudinary. Run it again later for the rest.',
+    ].join(' ');
+    notifyListeners();
+  }
+
+  /// Names the files of [songs] in the Cloudinary Media Library after their
+  /// titles. Unsigned uploads cannot, so the Worker does it with the
+  /// account's API secret. Returns how many were named and never throws.
+  Future<int> _nameOnCloudinary(
+    List<Song> songs, {
+    void Function(int sent)? onProgress,
+  }) async {
+    final user = _auth?.currentUser;
+    final files = [
+      for (final song in songs)
+        if (song.publicId?.startsWith('nexmusic/') == true) song,
+    ];
+    if (user == null || files.isEmpty || pushWorkerUrl.isEmpty) return 0;
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
+    var named = 0;
+    try {
+      for (var start = 0; start < files.length; start += 20) {
+        final batch = files.sublist(start, math.min(start + 20, files.length));
+        final token = await user.getIdToken();
+        final request = await client.postUrl(
+          Uri.parse('$pushWorkerUrl/cloudinary/names'),
+        );
+        request.headers
+          ..set(HttpHeaders.authorizationHeader, 'Bearer $token')
+          ..contentType = ContentType.json;
+        request.write(
+          jsonEncode({
+            'songs': [
+              for (final song in batch)
+                {'publicId': song.publicId, 'name': song.title},
+            ],
+          }),
+        );
+        final response = await request.close().timeout(
+          const Duration(seconds: 60),
+        );
+        final reply = jsonDecode(await response.transform(utf8.decoder).join());
+        if (reply case {'named': final int count}) named += count;
+        // Busy, not connected or signed out: the rest would fail the same way.
+        if (response.statusCode != HttpStatus.ok) break;
+        onProgress?.call(start + batch.length);
+      }
+    } catch (error) {
+      debugPrint('Cloudinary names failed: $error');
+    } finally {
+      client.close(force: true);
+    }
+    return named;
+  }
+
   /// Renames an upload or changes its categories, the first of which is its
   /// main one. Anyone signed in can edit any upload.
   Future<bool> updateSong(
@@ -2571,6 +2697,9 @@ class MusicController extends ChangeNotifier {
         ),
       );
       if (artist != null) setSongArtist(song, artist);
+      if (cleanTitle != song.title) {
+        unawaited(_nameOnCloudinary([song.copyWith(title: cleanTitle)]));
+      }
       final activity = songEditActivity(
         oldTitle: song.title,
         newTitle: cleanTitle,

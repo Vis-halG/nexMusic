@@ -273,6 +273,46 @@ void main() {
     expect(uploadKindFor('notes.txt'), isNull);
   });
 
+  test('track numbers come off file-name titles, real titles stay', () async {
+    for (final (title, clean) in [
+      ('220200Aane Wali Hai Bahar', 'Aane Wali Hai Bahar'),
+      ('16 Titli Lofi Mix - Vishal-Shekhar', 'Titli Lofi Mix - Vishal-Shekhar'),
+      ('1 20 Mera Dil Bhi Kitna Pagal Hai', 'Mera Dil Bhi Kitna Pagal Hai'),
+      ('07. Kesariya', 'Kesariya'),
+      ('03 - Tum Hi Ho', 'Tum Hi Ho'),
+      ('1942 A Love Story', '1942 A Love Story'),
+      ('Zinda', 'Zinda'),
+      ('12', '12'),
+    ]) {
+      expect(withoutTrackNumber(title), clean, reason: title);
+    }
+    SharedPreferences.setMockInitialValues({});
+    final controller = MusicController(await SharedPreferences.getInstance())
+      ..songs = const [
+        Song(
+          id: 'a',
+          title: '05 Jodi',
+          kind: 'audio',
+          url: 'u',
+          categoryId: 'c1',
+          publicId: 'nexmusic/a',
+        ),
+        Song(
+          id: 'b',
+          title: 'Rukh',
+          kind: 'audio',
+          url: 'u',
+          categoryId: 'c1',
+          publicId: 'nexmusic/b',
+        ),
+        // Not an upload, so it is neither cleaned nor named.
+        Song(id: 'c', title: '01 Stream', kind: 'audio', url: 'u'),
+      ];
+    addTearDown(controller.dispose);
+    expect(controller.songsWithTrackNumbers.map((s) => s.id), ['a']);
+    expect(controller.cloudinarySongs.map((s) => s.id), ['a', 'b']);
+  });
+
   test('formats phones cannot play are streamed as MP3 or MP4', () {
     const base = 'https://res.cloudinary.com/demo/video/upload/v1/nexmusic/abc';
     expect(playbackUrlFor('$base.mp3'), '$base.mp3');
