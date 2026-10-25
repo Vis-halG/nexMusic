@@ -118,8 +118,11 @@ void main() {
       expect(tester.widget<TextField>(search).controller!.text, 'My query');
       expect(fast.calls, calls);
       fast.waiting = Completer();
-      await tester.tap(find.byTooltip('Refresh streams'));
-      await tester.pump(const Duration(milliseconds: 200));
+      // Pulling the feed down refreshes it; there is no refresh button.
+      await tester.drag(stream, const Offset(0, 300));
+      // Let the list settle on the dots' gap while the refresh is pending.
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
       expect(find.text('Loaded song'), findsWidgets);
       fast.waiting!.complete([track('jiosaavn', 'New song')]);
       await tester.pumpAndSettle();

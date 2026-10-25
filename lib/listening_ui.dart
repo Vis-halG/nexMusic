@@ -230,31 +230,30 @@ class PersonalLibraryPanel extends StatelessWidget {
             ),
             onTap: () => _push(context, PlaylistScreen(id: p.id)),
           ),
-        ListTile(
-          leading: const Icon(Icons.person_outline_rounded),
-          title: const Text('Artists'),
-          subtitle: Text('${music.artistCategories.length} artist categories'),
+        _NavRow(
+          icon: Icons.person_outline_rounded,
+          title: 'Artists',
           onTap: () => _push(context, const MusicArtistsScreen()),
         ),
-        ListTile(
-          leading: const Icon(Icons.folder_open),
-          title: const Text('Music on this device'),
-          subtitle: Text('${music.personal.localTracks.length} tracks'),
+        _NavRow(
+          icon: Icons.folder_open,
+          title: 'Music on this device',
+          trailing: '${music.personal.localTracks.length}',
           onTap: () => _push(context, const DeviceMusicScreen()),
         ),
-        ListTile(
-          leading: const Icon(Icons.podcasts),
-          title: const Text('Podcasts & audiobooks'),
+        _NavRow(
+          icon: Icons.podcasts,
+          title: 'Podcasts & audiobooks',
           onTap: () => _push(context, const LongformScreen()),
         ),
-        ListTile(
-          leading: const Icon(Icons.download_outlined),
-          title: const Text('Download manager'),
+        _NavRow(
+          icon: Icons.download_outlined,
+          title: 'Download manager',
           onTap: () => _push(context, const MusicDownloadsScreen()),
         ),
-        ListTile(
-          leading: const Icon(Icons.groups_outlined),
-          title: const Text('Listen with friends'),
+        _NavRow(
+          icon: Icons.groups_outlined,
+          title: 'Listen with friends',
           onTap: () => _push(context, const SocialMusicScreen()),
         ),
       ],

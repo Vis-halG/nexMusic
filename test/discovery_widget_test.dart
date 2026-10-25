@@ -72,7 +72,12 @@ void main() {
     await tester.tap(find.text('Library'));
     await tester.pumpAndSettle();
     expect(find.byTooltip('Play random'), findsOneWidget);
-    expect(find.text('Artists'), findsOneWidget);
+    expect(find.text('Search your library'), findsOneWidget);
+    // Artists and the other library tools moved to Profile.
+    expect(find.text('Artists'), findsNothing);
+    await tester.tap(find.text('Profile'));
+    await tester.pumpAndSettle();
+    expect(find.text('Artists', skipOffstage: false), findsOneWidget);
     controller.current = track('ytmusic', 'YouTube pick');
     await tester.pumpWidget(
       ChangeNotifierProvider.value(

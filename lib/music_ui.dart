@@ -4,6 +4,8 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/cupertino.dart'
+    show CupertinoSliverRefreshControl, RefreshIndicatorMode;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -762,6 +764,149 @@ class _EmptyState extends StatelessWidget {
   );
 }
 
+/// Three violet dots. While [animate] is off they fill in with [progress],
+/// which is how far a pull to refresh has gone.
+class _LoadingDots extends StatefulWidget {
+  const _LoadingDots({this.progress = 1, this.animate = true});
+  final double progress;
+  final bool animate;
+
+  @override
+  State<_LoadingDots> createState() => _LoadingDotsState();
+}
+
+class _LoadingDotsState extends State<_LoadingDots>
+    with SingleTickerProviderStateMixin {
+  late final _wave = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1050),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(_LoadingDots oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _sync();
+  }
+
+  void _sync() {
+    if (!widget.animate) {
+      _wave.value = 0;
+    } else if (!_wave.isAnimating) {
+      _wave.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _wave.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _wave,
+    builder: (context, _) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < 3; i++)
+          Builder(
+            builder: (context) {
+              // Each dot rises in turn, a sixth of a cycle after the last.
+              final lift = widget.animate
+                  ? math.max(
+                      0.0,
+                      math.sin(((_wave.value - i / 6) % 1) * 2 * math.pi),
+                    )
+                  : 0.0;
+              final shown = widget.animate
+                  ? 0.4 + 0.6 * lift
+                  : (widget.progress * 3 - i).clamp(0.0, 1.0);
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 3.5),
+                child: Transform.translate(
+                  offset: Offset(0, -6 * lift),
+                  child: Opacity(
+                    opacity: shown,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: NexMusic.violet,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    ),
+  );
+}
+
+/// Pull to refresh for a [CustomScrollView]: the list moves down to make room
+/// for the dots and stays there until the refresh finishes.
+Widget _dotsRefreshControl(Future<void> Function() onRefresh) =>
+    CupertinoSliverRefreshControl(
+      refreshTriggerPullDistance: 90,
+      refreshIndicatorExtent: 56,
+      onRefresh: onRefresh,
+      builder: (context, mode, pulled, trigger, extent) {
+        final busy =
+            mode == RefreshIndicatorMode.armed ||
+            mode == RefreshIndicatorMode.refresh;
+        return Center(
+          child: Opacity(
+            opacity: mode == RefreshIndicatorMode.done
+                ? (pulled / extent).clamp(0.0, 1.0)
+                : 1,
+            child: _LoadingDots(
+              progress: (pulled / trigger).clamp(0.0, 1.0),
+              animate: busy,
+            ),
+          ),
+        );
+      },
+    );
+
+/// Section title with a muted subtitle, as used by Stream and Library.
+Widget _feedHeading(
+  BuildContext context,
+  String title,
+  String subtitle, {
+  Widget? trailing,
+}) => Padding(
+  padding: EdgeInsets.fromLTRB(20, 20, trailing == null ? 20 : 8, 12),
+  child: Row(
+    children: [
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: TextStyle(fontSize: 12, color: _muted(context)),
+            ),
+          ],
+        ),
+      ),
+      ?trailing,
+    ],
+  ),
+);
+
 class _NavRow extends StatelessWidget {
   const _NavRow({
     required this.icon,
@@ -1220,6 +1365,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
 
   int _currentTabIndex = 0;
   var _streamKey = GlobalKey<_SpotifyStreamViewState>();
+  final _libraryKey = GlobalKey<_SpotifyLibraryViewState>();
   _SpotifyStreamView? _streamView;
   Object? _streamAccount;
   bool _streamVisited = false;
@@ -1254,7 +1400,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
     if (_currentTabIndex == 1) _streamVisited = true;
     final Widget currentView = switch (_currentTabIndex) {
       1 => const SizedBox.shrink(),
-      2 => const _SpotifyLibraryView(),
+      2 => _SpotifyLibraryView(key: _libraryKey),
       3 => const ProfileScreen(showAppBar: false),
       _ => const _SpotifyHomeView(),
     };
@@ -1334,12 +1480,20 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
   }
 
   void _playRandomSong(BuildContext context) {
+    final music = context.read<MusicController>();
+    final librarySongs = _currentTabIndex == 2
+        ? _libraryKey.currentState?.shuffleSongs
+        : null;
+    if (librarySongs != null) {
+      unawaited(music.playRandomFrom(librarySongs));
+      return;
+    }
     final scope = switch (_currentTabIndex) {
       1 => MusicRandomScope.stream,
       2 => MusicRandomScope.library,
       _ => MusicRandomScope.home,
     };
-    unawaited(context.read<MusicController>().playRandom(scope));
+    unawaited(music.playRandom(scope));
   }
 }
 
@@ -1526,13 +1680,13 @@ class _SpotifyQuickTile extends StatelessWidget {
   const _SpotifyQuickTile({
     required this.title,
     required this.icon,
-    this.gradient,
+    required this.count,
     required this.onTap,
   });
 
   final String title;
   final IconData icon;
-  final Gradient? gradient;
+  final int count;
   final VoidCallback onTap;
 
   @override
@@ -1540,57 +1694,53 @@ class _SpotifyQuickTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Material(
       color: scheme.surfaceContainer,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(14),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        child: Row(
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                gradient:
-                    gradient ??
-                    LinearGradient(
-                      colors: [
-                        NexMusic.violet,
-                        NexMusic.violet.withValues(alpha: 0.6),
-                      ],
-                    ),
-              ),
-              child: Icon(icon, color: Colors.white, size: 24),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                  height: 1.2,
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Container(
-                width: 28,
-                height: 28,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
-                  color: NexMusic.violet.withValues(alpha: 0.15),
-                  shape: BoxShape.circle,
+                  color: NexMusic.violet.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(
-                  Icons.play_arrow_rounded,
-                  size: 18,
-                  color: NexMusic.violet,
+                child: Icon(icon, color: NexMusic.violet, size: 22),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13.5,
+                        letterSpacing: -0.1,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$count ${count == 1 ? 'song' : 'songs'}',
+                      maxLines: 1,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1718,395 +1868,342 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
     final music = context.watch<MusicController>();
     final allSongs = music.songs;
 
-    return RefreshIndicator(
-      onRefresh: () async {
-        await Future.wait([music.refreshCatalog(), music.loadDiscoveryHome()]);
-      },
-      child: CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 12, 10),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _timeGreeting(),
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.4,
-                      ),
+    return CustomScrollView(
+      slivers: [
+        _dotsRefreshControl(() async {
+          await Future.wait([
+            music.refreshCatalog(),
+            music.loadDiscoveryHome(),
+          ]);
+        }),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _timeGreeting(),
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.4,
                     ),
                   ),
-                  IconButton(
-                    tooltip: 'Search',
-                    onPressed: () => _push(context, const SearchScreen()),
-                    icon: const Icon(Icons.search_rounded, size: 26),
-                  ),
-                  IconButton(
-                    tooltip: 'Upload song',
-                    onPressed: () => _push(context, const UploadScreen()),
-                    icon: const Icon(Icons.add_circle_outline_rounded),
-                  ),
-                ],
-              ),
+                ),
+                IconButton(
+                  tooltip: 'Search',
+                  onPressed: () => _push(context, const SearchScreen()),
+                  icon: const Icon(Icons.search_rounded, size: 26),
+                ),
+                IconButton(
+                  tooltip: 'Upload song',
+                  onPressed: () => _push(context, const UploadScreen()),
+                  icon: const Icon(Icons.add_circle_outline_rounded),
+                ),
+              ],
             ),
           ),
+        ),
 
-          // Horizontal Category Filter Pills
-          SliverToBoxAdapter(
-            child: SizedBox(
-              height: 48,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 6,
+        // Horizontal Category Filter Pills
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: 48,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+              children: [
+                _Pill(
+                  label: 'All',
+                  selected: _selectedCategory == null,
+                  onTap: () {
+                    context.read<SongSelection?>()?.close();
+                    setState(() => _selectedCategory = null);
+                  },
                 ),
-                children: [
+                for (final cat in music.categories)
                   _Pill(
-                    label: 'All',
-                    selected: _selectedCategory == null,
+                    label: cat.name,
+                    selected: _selectedCategory == cat.id,
                     onTap: () {
                       context.read<SongSelection?>()?.close();
-                      setState(() => _selectedCategory = null);
+                      setState(() => _selectedCategory = cat.id);
                     },
+                    onLongPress: () => _categoryActions(context, cat),
                   ),
-                  for (final cat in music.categories)
-                    _Pill(
-                      label: cat.name,
-                      selected: _selectedCategory == cat.id,
-                      onTap: () {
-                        context.read<SongSelection?>()?.close();
-                        setState(() => _selectedCategory = cat.id);
-                      },
-                      onLongPress: () => _categoryActions(context, cat),
-                    ),
-                  _Pill(
-                    icon: Icons.add_rounded,
-                    label: 'New',
-                    onTap: () async {
-                      final cat = await _createCategory(context);
-                      if (cat != null && mounted) {
-                        setState(() => _selectedCategory = cat.id);
-                      }
-                    },
-                  ),
-                ],
-              ),
+                _Pill(
+                  icon: Icons.add_rounded,
+                  label: 'New',
+                  onTap: () async {
+                    final cat = await _createCategory(context);
+                    if (cat != null && mounted) {
+                      setState(() => _selectedCategory = cat.id);
+                    }
+                  },
+                ),
+              ],
             ),
           ),
+        ),
 
-          // Upload / conversion progress
-          if (music.uploads.isNotEmpty)
-            SliverToBoxAdapter(
-              child: InkWell(
-                onTap: () => _push(context, const UploadScreen()),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 6, 20, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        music.uploading
-                            ? 'Uploading ${music.uploadsFinished} of ${music.uploads.length}'
-                            : 'Uploads finished · tap to review',
-                        style: TextStyle(color: _muted(context), fontSize: 12),
-                      ),
-                      const SizedBox(height: 6),
-                      LinearProgressIndicator(
-                        value: music.uploadFraction,
-                        minHeight: 3,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-          // IF A SPECIFIC CATEGORY IS SELECTED: Show filtered tracklist
-          if (_selectedCategory != null) ...[
-            SliverToBoxAdapter(
+        // Upload / conversion progress
+        if (music.uploads.isNotEmpty)
+          SliverToBoxAdapter(
+            child: InkWell(
+              onTap: () => _push(context, const UploadScreen()),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                padding: const EdgeInsets.fromLTRB(20, 6, 20, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      music.categoryName(_selectedCategory!),
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                      ),
+                      music.uploading
+                          ? 'Uploading ${music.uploadsFinished} of ${music.uploads.length}'
+                          : 'Uploads finished · tap to review',
+                      style: TextStyle(color: _muted(context), fontSize: 12),
                     ),
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        minimumSize: Size.zero,
-                      ),
-                      onPressed: () {
-                        final songs = music.songsIn(_selectedCategory);
-                        if (songs.isNotEmpty) {
-                          _openSong(context, songs.first, queue: songs);
-                        }
-                      },
-                      icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                      label: const Text('Play'),
+                    const SizedBox(height: 6),
+                    LinearProgressIndicator(
+                      value: music.uploadFraction,
+                      minHeight: 3,
                     ),
                   ],
                 ),
               ),
             ),
-            SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final list = music.songsIn(_selectedCategory);
-                  if (list.isEmpty) {
-                    return const Padding(
-                      padding: EdgeInsets.all(40),
-                      child: Center(
-                        child: Text(
-                          'No songs in this category yet',
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      ),
-                    );
-                  }
-                  return SongTile(song: list[index], queue: list);
-                },
-                childCount: math.max(
-                  1,
-                  music.songsIn(_selectedCategory).length,
-                ),
-              ),
-            ),
-          ] else ...[
-            // QUICK ACCESS HERO GRID (Top 4-6 cards)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    return GridView.count(
-                      crossAxisCount: 2,
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
-                      childAspectRatio: 2.7,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      children: [
-                        _SpotifyQuickTile(
-                          title: 'Liked Songs',
-                          icon: Icons.favorite_rounded,
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF8B5CF6), Color(0xFF4C1D95)],
-                          ),
-                          onTap: () => _push(
-                            context,
-                            SongListScreen(
-                              title: 'Liked Songs',
-                              emptyText: 'No community likes yet.',
-                              select: (m) =>
-                                  m.communitySongs(MediaCollection.likedSongs),
-                            ),
-                          ),
-                        ),
-                        _SpotifyQuickTile(
-                          title: 'Recently Played',
-                          icon: Icons.history_rounded,
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF3B82F6), Color(0xFF1E3A8A)],
-                          ),
-                          onTap: () => _push(
-                            context,
-                            SongListScreen(
-                              title: 'Recently Played',
-                              emptyText:
-                                  'Community listening activity will appear here.',
-                              select: (m) =>
-                                  m.communitySongs(MediaCollection.recent),
-                            ),
-                          ),
-                        ),
-                        for (final (collection, title, icon) in const [
-                          (
-                            MediaCollection.mostPlayed,
-                            'Most Played',
-                            Icons.bar_chart_rounded,
-                          ),
-                          (
-                            MediaCollection.neverPlayed,
-                            'Never Played',
-                            Icons.explore_outlined,
-                          ),
-                        ])
-                          _SpotifyQuickTile(
-                            title: title,
-                            icon: icon,
-                            onTap: () => _push(
-                              context,
-                              SongListScreen(
-                                title: title,
-                                emptyText:
-                                    collection == MediaCollection.mostPlayed
-                                    ? 'The community’s most played songs will appear here.'
-                                    : 'No unplayed songs available yet.',
-                                select: (m) => m.communitySongs(collection),
-                              ),
-                            ),
-                          ),
-                        _SpotifyQuickTile(
-                          title: 'Downloads',
-                          icon: Icons.offline_pin_rounded,
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF10B981), Color(0xFF064E3B)],
-                          ),
-                          onTap: () => _push(
-                            context,
-                            SongListScreen(
-                              title: 'Downloads',
-                              emptyText: 'No downloaded songs.',
-                              select: (m) => m.downloadedSongs,
-                            ),
-                          ),
-                        ),
-                        if (music.categories.isNotEmpty)
-                          _SpotifyQuickTile(
-                            title: music.categories.first.name,
-                            icon: Icons.queue_music_rounded,
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFFEC4899), Color(0xFF831843)],
-                            ),
-                            onTap: () {
-                              final catSongs = music.songsIn(
-                                music.categories.first.id,
-                              );
-                              if (catSongs.isNotEmpty) {
-                                _openSong(
-                                  context,
-                                  catSongs.first,
-                                  queue: catSongs,
-                                );
-                              } else {
-                                setState(
-                                  () => _selectedCategory =
-                                      music.categories.first.id,
-                                );
-                              }
-                            },
-                          ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-            ),
+          ),
 
-            // SECTIONS: history and likes mixed across JioSaavn, YouTube
-            // and the shared catalogue.
-            for (final (collection, title) in const [
-              (MediaCollection.recent, 'Recently Played'),
-              (MediaCollection.watched, 'Recently Watched'),
-              (MediaCollection.likedSongs, 'Liked Songs'),
-              (MediaCollection.mostPlayed, 'Most Played'),
-              (MediaCollection.neverPlayed, 'Never Played'),
-            ])
-              SliverToBoxAdapter(
-                child: _SpotifySection(
-                  title: title,
-                  subtitle: 'Across all listeners',
-                  songs: music.communitySongs(collection),
-                  onSeeAll: () => _push(
-                    context,
-                    SongListScreen(
-                      title: title,
-                      emptyText: 'Nothing here yet.',
-                      select: (m) => m.communitySongs(collection),
+        // IF A SPECIFIC CATEGORY IS SELECTED: Show filtered tracklist
+        if (_selectedCategory != null) ...[
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    music.categoryName(_selectedCategory!),
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                ),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      minimumSize: Size.zero,
+                    ),
+                    onPressed: () {
+                      final songs = music.songsIn(_selectedCategory);
+                      if (songs.isNotEmpty) {
+                        _openSong(context, songs.first, queue: songs);
+                      }
+                    },
+                    icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                    label: const Text('Play'),
+                  ),
+                ],
               ),
-
-            // SECTION: Trending & New Uploads
-            if (allSongs.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _SpotifySection(
-                  title: 'Trending & New Releases',
-                  subtitle: 'Fresh community uploads',
-                  songs: allSongs.take(15).toList(),
+            ),
+          ),
+          SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final list = music.songsIn(_selectedCategory);
+                if (list.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Center(
+                      child: Text(
+                        'No songs in this category yet',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                  );
+                }
+                return SongTile(song: list[index], queue: list);
+              },
+              childCount: math.max(1, music.songsIn(_selectedCategory).length),
+            ),
+          ),
+        ] else ...[
+          // QUICK ACCESS HERO GRID (Top 4-6 cards)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+              child: GridView(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                  mainAxisExtent: 60,
                 ),
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                children: [
+                  for (final (collection, title, icon, empty) in const [
+                    (
+                      MediaCollection.likedSongs,
+                      'Liked Songs',
+                      Icons.favorite_rounded,
+                      'No community likes yet.',
+                    ),
+                    (
+                      MediaCollection.recent,
+                      'Recently Played',
+                      Icons.history_rounded,
+                      'Community listening activity will appear here.',
+                    ),
+                    (
+                      MediaCollection.mostPlayed,
+                      'Most Played',
+                      Icons.bar_chart_rounded,
+                      'The community’s most played songs will appear here.',
+                    ),
+                    (
+                      MediaCollection.neverPlayed,
+                      'Never Played',
+                      Icons.explore_outlined,
+                      'No unplayed songs available yet.',
+                    ),
+                  ])
+                    _SpotifyQuickTile(
+                      title: title,
+                      icon: icon,
+                      count: music.communitySongs(collection).length,
+                      onTap: () => _push(
+                        context,
+                        SongListScreen(
+                          title: title,
+                          emptyText: empty,
+                          select: (m) => m.communitySongs(collection),
+                        ),
+                      ),
+                    ),
+                  _SpotifyQuickTile(
+                    title: 'Downloads',
+                    icon: Icons.download_done_rounded,
+                    count: music.downloadedSongs.length,
+                    onTap: () => _push(
+                      context,
+                      SongListScreen(
+                        title: 'Downloads',
+                        emptyText: 'No downloaded songs.',
+                        select: (m) => m.downloadedSongs,
+                      ),
+                    ),
+                  ),
+                  if (music.categories.isNotEmpty)
+                    _SpotifyQuickTile(
+                      title: music.categories.first.name,
+                      icon: Icons.queue_music_rounded,
+                      count: music.songsIn(music.categories.first.id).length,
+                      onTap: () => setState(
+                        () => _selectedCategory = music.categories.first.id,
+                      ),
+                    ),
+                ],
               ),
+            ),
+          ),
 
-            // DYNAMIC CATEGORY CAROUSELS
-            for (final cat in music.categories)
-              if (music.songsIn(cat.id).isNotEmpty)
-                SliverToBoxAdapter(
-                  child: _SpotifySection(
-                    title: cat.name,
-                    subtitle: 'Category playlist',
-                    songs: music.songsIn(cat.id),
-                    onSeeAll: () => setState(() => _selectedCategory = cat.id),
+          // SECTIONS: history and likes mixed across JioSaavn, YouTube
+          // and the shared catalogue.
+          for (final (collection, title) in const [
+            (MediaCollection.recent, 'Recently Played'),
+            (MediaCollection.watched, 'Recently Watched'),
+            (MediaCollection.likedSongs, 'Liked Songs'),
+            (MediaCollection.mostPlayed, 'Most Played'),
+            (MediaCollection.neverPlayed, 'Never Played'),
+          ])
+            SliverToBoxAdapter(
+              child: _SpotifySection(
+                title: title,
+                subtitle: 'Across all listeners',
+                songs: music.communitySongs(collection),
+                onSeeAll: () => _push(
+                  context,
+                  SongListScreen(
+                    title: title,
+                    emptyText: 'Nothing here yet.',
+                    select: (m) => m.communitySongs(collection),
                   ),
                 ),
+              ),
+            ),
 
-            // Recommendations from both online music catalogues.
-            if (music.providerSongs.isNotEmpty)
+          // SECTION: Trending & New Uploads
+          if (allSongs.isNotEmpty)
+            SliverToBoxAdapter(
+              child: _SpotifySection(
+                title: 'Trending & New Releases',
+                subtitle: 'Fresh community uploads',
+                songs: allSongs.take(15).toList(),
+              ),
+            ),
+
+          // DYNAMIC CATEGORY CAROUSELS
+          for (final cat in music.categories)
+            if (music.songsIn(cat.id).isNotEmpty)
               SliverToBoxAdapter(
                 child: _SpotifySection(
-                  title: 'Music Highlights',
-                  subtitle: 'JioSaavn + YouTube Music',
-                  songs: music.providerSongs,
+                  title: cat.name,
+                  subtitle: 'Category playlist',
+                  songs: music.songsIn(cat.id),
+                  onSeeAll: () => setState(() => _selectedCategory = cat.id),
                 ),
               ),
 
-            if (allSongs.isEmpty && music.providerSongs.isEmpty)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 48),
-                  child: Center(
-                    child: music.providerLoading
-                        ? const Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              SizedBox(
-                                width: 28,
-                                height: 28,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2.5,
-                                  color: NexMusic.violet,
-                                ),
+          // Recommendations from both online music catalogues.
+          if (music.providerSongs.isNotEmpty)
+            SliverToBoxAdapter(
+              child: _SpotifySection(
+                title: 'Music Highlights',
+                subtitle: 'JioSaavn + YouTube Music',
+                songs: music.providerSongs,
+              ),
+            ),
+
+          if (allSongs.isEmpty && music.providerSongs.isEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 48),
+                child: Center(
+                  child: music.providerLoading
+                      ? const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _LoadingDots(),
+                            SizedBox(height: 14),
+                            Text(
+                              'Loading music for you...',
+                              style: TextStyle(
+                                color: Colors.grey,
+                                fontSize: 13,
                               ),
-                              SizedBox(height: 12),
-                              Text(
-                                'Loading music for you...',
-                                style: TextStyle(
-                                  color: Colors.grey,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ],
-                          )
-                        : Text(
-                            'No songs available yet.\nExplore the Stream tab or upload songs.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: _muted(context),
-                              fontSize: 13,
-                              height: 1.5,
                             ),
+                          ],
+                        )
+                      : Text(
+                          'No songs available yet.\nExplore the Stream tab or upload songs.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: _muted(context),
+                            fontSize: 13,
+                            height: 1.5,
                           ),
-                  ),
+                        ),
                 ),
               ),
+            ),
 
-            const SliverToBoxAdapter(child: SizedBox(height: 80)),
-          ],
+          const SliverToBoxAdapter(child: SizedBox(height: 80)),
         ],
-      ),
+      ],
     );
   }
 }
@@ -2415,251 +2512,223 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
         }
         return false;
       },
-      child: RefreshIndicator(
-        onRefresh: () => _load(refresh: true),
-        child: CustomScrollView(
-          key: const PageStorageKey('stream'),
-          controller: _scroll,
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            SliverToBoxAdapter(
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 20, 12, 12),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.stream_rounded,
-                          color: NexMusic.violet,
-                          size: 30,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Stream',
-                                style: TextStyle(
-                                  fontSize: 26,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              Text(
-                                'JioSaavn + YouTube Music, together',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Refresh streams',
-                          onPressed: () => _load(refresh: true),
-                          icon: const Icon(Icons.refresh_rounded),
-                        ),
-                      ],
+      child: CustomScrollView(
+        key: const PageStorageKey('stream'),
+        controller: _scroll,
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          _dotsRefreshControl(() => _load(refresh: true)),
+          SliverToBoxAdapter(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _TabTitle(icon: Icons.stream_rounded, title: 'Stream'),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 8,
+                  ),
+                  child: TextField(
+                    controller: _search,
+                    onChanged: _onSearch,
+                    decoration: InputDecoration(
+                      hintText: 'Search both music providers',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      suffixIcon: _search.text.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Clear search',
+                              icon: const Icon(Icons.close_rounded),
+                              onPressed: () {
+                                _search.clear();
+                                _onSearch('');
+                              },
+                            ),
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 8,
-                    ),
-                    child: TextField(
-                      controller: _search,
-                      onChanged: _onSearch,
-                      decoration: InputDecoration(
-                        hintText: 'Search both music providers',
-                        prefixIcon: const Icon(Icons.search_rounded),
-                        suffixIcon: _search.text.isEmpty
-                            ? null
-                            : IconButton(
-                                tooltip: 'Clear search',
-                                icon: const Icon(Icons.close_rounded),
-                                onPressed: () {
-                                  _search.clear();
-                                  _onSearch('');
-                                },
-                              ),
+                ),
+                if (_search.text.trim().isEmpty)
+                  SizedBox(
+                    height: 48,
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _categories.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 8),
+                      itemBuilder: (_, i) => ChoiceChip(
+                        label: Text(_categories[i]),
+                        selected: _category == _categories[i],
+                        onSelected: (_) {
+                          if (_category == _categories[i]) return;
+                          setState(() => _category = _categories[i]);
+                          _load();
+                        },
                       ),
                     ),
                   ),
-                  if (_search.text.trim().isEmpty)
-                    SizedBox(
-                      height: 48,
-                      child: ListView.separated(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        scrollDirection: Axis.horizontal,
-                        itemCount: _categories.length,
-                        separatorBuilder: (_, _) => const SizedBox(width: 8),
-                        itemBuilder: (_, i) => ChoiceChip(
-                          label: Text(_categories[i]),
-                          selected: _category == _categories[i],
-                          onSelected: (_) {
-                            if (_category == _categories[i]) return;
-                            setState(() => _category = _categories[i]);
-                            _load();
-                          },
-                        ),
-                      ),
+                if (artists.isNotEmpty) ...[
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                    child: Text(
+                      'Browse by artist',
+                      style: TextStyle(fontWeight: FontWeight.w600),
                     ),
-                  if (artists.isNotEmpty) ...[
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
-                      child: Text(
-                        'Browse by artist',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    SizedBox(
-                      height: 48,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        itemCount: artists.length,
-                        separatorBuilder: (_, _) => const SizedBox(width: 8),
-                        itemBuilder: (_, i) => ActionChip(
-                          avatar: const Icon(Icons.person_outline, size: 18),
-                          label: Text(artists[i].name),
-                          onPressed: () => _push(
-                            context,
-                            ArtistAlbumScreen(
-                              song: artists[i].tracks.first.copyWith(
-                                artist: artists[i].name,
-                              ),
+                  ),
+                  SizedBox(
+                    height: 48,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      itemCount: artists.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 8),
+                      itemBuilder: (_, i) => ActionChip(
+                        avatar: const Icon(Icons.person_outline, size: 18),
+                        label: Text(artists[i].name),
+                        onPressed: () => _push(
+                          context,
+                          ArtistAlbumScreen(
+                            song: artists[i].tracks.first.copyWith(
+                              artist: artists[i].name,
                             ),
                           ),
                         ),
                       ),
                     ),
+                  ),
+                ],
+                if (_unavailable.isNotEmpty && !_loading)
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      '${_unavailable.join(' and ')} unavailable. Pull down to retry.',
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                if (_loading && tracks.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(48),
+                    child: Center(child: _LoadingDots()),
+                  )
+                else ...[
+                  if (showHome && picks.isNotEmpty) ...[
+                    _heading('Quick Picks', 'Inspired by your listening'),
+                    _QuickPicksGrid(songs: picks),
                   ],
-                  if (_unavailable.isNotEmpty && !_loading)
+                  _heading(
+                    _search.text.trim().isNotEmpty
+                        ? 'Search results'
+                        : _category == 'For you'
+                        ? 'Made for your next listen'
+                        : _category,
+                    _personalized
+                        ? 'Based on your favourites and listening'
+                        : 'A mix from JioSaavn and YouTube Music',
+                  ),
+                  if (tracks.isEmpty)
                     Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Text(
-                        '${_unavailable.join(' and ')} unavailable. Pull down to retry.',
-                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      padding: const EdgeInsets.all(32),
+                      child: Column(
+                        children: [
+                          const Icon(Icons.search_off_rounded, size: 40),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'No tracks available. Try another search or refresh.',
+                          ),
+                          TextButton(
+                            onPressed: () => _load(refresh: true),
+                            child: const Text('Retry'),
+                          ),
+                        ],
                       ),
                     ),
-                  if (_loading && tracks.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(48),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else ...[
-                    if (showHome && picks.isNotEmpty) ...[
-                      _heading('Quick Picks', 'Inspired by your listening'),
-                      SizedBox(
-                        height: 218,
-                        child: GridView.builder(
-                          scrollDirection: Axis.horizontal,
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 3,
-                                mainAxisExtent: 290,
-                                mainAxisSpacing: 12,
-                                crossAxisSpacing: 4,
-                              ),
-                          itemCount: picks.length,
-                          itemBuilder: (_, i) =>
-                              _QuickPickTile(song: picks[i], queue: picks),
-                        ),
-                      ),
-                    ],
-                    _heading(
-                      _search.text.trim().isNotEmpty
-                          ? 'Search results'
-                          : _category == 'For you'
-                          ? 'Made for your next listen'
-                          : _category,
-                      _personalized
-                          ? 'Based on your favourites and listening'
-                          : 'A mix from JioSaavn and YouTube Music',
-                    ),
-                    if (tracks.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.all(32),
-                        child: Column(
-                          children: [
-                            const Icon(Icons.search_off_rounded, size: 40),
-                            const SizedBox(height: 12),
-                            const Text(
-                              'No tracks available. Try another search or refresh.',
-                            ),
-                            TextButton(
-                              onPressed: () => _load(refresh: true),
-                              child: const Text('Retry'),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
                 ],
-              ),
+              ],
             ),
-            SliverList.builder(
-              itemCount: tracks.length,
-              itemBuilder: (_, index) => SongTile(
-                key: ValueKey(tracks[index].id),
-                song: tracks[index],
-                queue: tracks,
-              ),
+          ),
+          SliverList.builder(
+            itemCount: tracks.length,
+            itemBuilder: (_, index) => SongTile(
+              key: ValueKey(tracks[index].id),
+              song: tracks[index],
+              queue: tracks,
             ),
-            SliverToBoxAdapter(
-              child: Column(
-                children: [
-                  if (showHome && similar.isNotEmpty)
-                    _SpotifySection(
-                      title: 'Similar to $_similarTitle',
-                      subtitle: 'Recommendations across both providers',
-                      songs: similar,
+          ),
+          SliverToBoxAdapter(
+            child: Column(
+              children: [
+                if (showHome && similar.isNotEmpty)
+                  _SpotifySection(
+                    title: 'Similar to $_similarTitle',
+                    subtitle: 'Recommendations across both providers',
+                    songs: similar,
+                  ),
+                if (_loadingMore || (_loading && tracks.isNotEmpty))
+                  const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: _LoadingDots()),
+                  )
+                else if (_hasMore && _category != 'Quick Picks')
+                  Center(
+                    child: TextButton.icon(
+                      onPressed: () => _load(more: true),
+                      icon: const Icon(Icons.expand_more),
+                      label: const Text('Load more'),
                     ),
-                  if (_loadingMore || (_loading && tracks.isNotEmpty))
-                    const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(
-                        child: SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2.5),
-                        ),
-                      ),
-                    )
-                  else if (_hasMore && _category != 'Quick Picks')
-                    Center(
-                      child: TextButton.icon(
-                        onPressed: () => _load(more: true),
-                        icon: const Icon(Icons.expand_more),
-                        label: const Text('Load more'),
-                      ),
-                    ),
-                  const SizedBox(height: 28),
-                ],
-              ),
+                  ),
+                const SizedBox(height: 28),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _heading(String title, String subtitle) => Padding(
+  Widget _heading(String title, String subtitle) =>
+      _feedHeading(context, title, subtitle);
+}
+
+/// The big icon and title at the top of the Stream and Library tabs.
+class _TabTitle extends StatelessWidget {
+  const _TabTitle({required this.icon, required this.title});
+  final IconData icon;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    child: Row(
       children: [
+        Icon(icon, color: NexMusic.violet, size: 30),
+        const SizedBox(width: 12),
         Text(
           title,
-          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+          style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700),
         ),
-        const SizedBox(height: 4),
-        Text(subtitle, style: TextStyle(fontSize: 12, color: _muted(context))),
       ],
+    ),
+  );
+}
+
+/// Three rows of songs that scroll sideways.
+class _QuickPicksGrid extends StatelessWidget {
+  const _QuickPicksGrid({required this.songs});
+  final List<Song> songs;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 218,
+    child: GridView.builder(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        mainAxisExtent: 290,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 4,
+      ),
+      itemCount: songs.length,
+      itemBuilder: (_, i) => _QuickPickTile(song: songs[i], queue: songs),
     ),
   );
 }
@@ -2734,7 +2803,9 @@ class _QuickPickTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    song.artist.isNotEmpty ? song.artist : 'YouTube Music',
+                    song.artist.isNotEmpty
+                        ? song.artist
+                        : context.read<MusicController>().songSource(song),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -3026,203 +3097,242 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
 // Spotify Library View
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _SpotifyLibraryView extends StatelessWidget {
-  const _SpotifyLibraryView();
+class _SpotifyLibraryView extends StatefulWidget {
+  const _SpotifyLibraryView({super.key});
+
+  @override
+  State<_SpotifyLibraryView> createState() => _SpotifyLibraryViewState();
+}
+
+class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
+  final _search = TextEditingController();
+
+  /// `all`, `liked`, `downloads`, `cat:<id>` or `pl:<id>`.
+  String _chip = 'all';
+  List<Song> _tracks = const [];
+  String _artistsFor = '';
+  List<MusicArtistCategory> _artists = const [];
+
+  /// The listed songs while a chip or search narrows them, for the shuffle
+  /// button. Null means the whole library.
+  List<Song>? get shuffleSongs =>
+      _chip == 'all' && _search.text.trim().isEmpty ? null : _tracks;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _select(String chip) {
+    if (_chip == chip) return;
+    context.read<SongSelection?>()?.close();
+    setState(() => _chip = chip);
+  }
 
   @override
   Widget build(BuildContext context) {
     final music = context.watch<MusicController>();
-    final scheme = Theme.of(context).colorScheme;
+    final playlists = music.personal.playlists;
+    final category = music.categories
+        .where((c) => _chip == 'cat:${c.id}')
+        .firstOrNull;
+    final playlist = playlists.where((p) => _chip == 'pl:${p.id}').firstOrNull;
+    // A deleted category or playlist falls back to everything.
+    if (_chip.contains(':') && category == null && playlist == null) {
+      _chip = 'all';
+    }
+    final source = switch (_chip) {
+      'liked' => music.communitySongs(MediaCollection.likedSongs),
+      'downloads' => music.downloadedSongs,
+      _ when category != null => music.songsIn(category.id),
+      _ when playlist != null => playlist.tracks,
+      _ => {
+        for (final s in [
+          ...music.songs,
+          ...music.likedSongs,
+          ...music.downloadedSongs,
+          ...music.personal.localTracks.values,
+          for (final p in playlists) ...p.tracks,
+        ])
+          s.id: s,
+      }.values.toList(),
+    };
+    final query = _search.text.trim().toLowerCase();
+    final tracks = _tracks = query.isEmpty
+        ? source
+        : source
+              .where(
+                (s) => '${s.title} ${s.artist} ${s.album}'
+                    .toLowerCase()
+                    .contains(query),
+              )
+              .toList();
+    // Grouping the whole library is slow, so only redo it when the list changes.
+    final artistsFor = '$_chip|$query|${tracks.length}';
+    if (_artistsFor != artistsFor) {
+      _artistsFor = artistsFor;
+      _artists = groupSongsByArtist(
+        tracks,
+      ).where((a) => !a.unknown).take(12).toList();
+    }
+    final picks = _chip == 'all' && query.isEmpty
+        ? music.recentSongs.where((s) => !s.isVideo).take(12).toList()
+        : const <Song>[];
+    final title = switch (_chip) {
+      'liked' => 'Liked Songs',
+      'downloads' => 'Downloads',
+      _ => category?.name ?? playlist?.name ?? 'All songs',
+    };
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 80),
-      children: [
-        const PersonalLibraryPanel(),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
-          child: Row(
+    Widget chip(String id, String label) => ChoiceChip(
+      label: Text(label),
+      selected: _chip == id,
+      onSelected: (_) => _select(id),
+    );
+
+    return CustomScrollView(
+      key: const PageStorageKey('library'),
+      slivers: [
+        _dotsRefreshControl(music.refreshCatalog),
+        SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _Avatar(initials: music.profileInitials, size: 34),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'Your Library',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.4,
+              const _TabTitle(
+                icon: Icons.library_music_rounded,
+                title: 'Library',
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 8,
+                ),
+                child: TextField(
+                  controller: _search,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: 'Search your library',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    suffixIcon: _search.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Clear search',
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: () => setState(_search.clear),
+                          ),
                   ),
                 ),
               ),
-              IconButton(
-                tooltip: 'Add category',
-                icon: const Icon(Icons.add_rounded),
-                onPressed: () => _createCategory(context),
+              SizedBox(
+                height: 48,
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    for (final item in [
+                      chip('all', 'All'),
+                      chip('liked', 'Liked'),
+                      chip('downloads', 'Downloads'),
+                      for (final c in music.categories)
+                        GestureDetector(
+                          onLongPress: () => _categoryActions(context, c),
+                          child: chip('cat:${c.id}', c.name),
+                        ),
+                      for (final p in playlists)
+                        chip('pl:${p.id}', '${p.cover} ${p.name}'),
+                      ActionChip(
+                        avatar: const Icon(Icons.add_rounded, size: 18),
+                        label: const Text('New'),
+                        onPressed: () async {
+                          final created = await _createCategory(context);
+                          if (created != null && mounted) {
+                            _select('cat:${created.id}');
+                          }
+                        },
+                      ),
+                    ])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: item,
+                      ),
+                  ],
+                ),
               ),
+              if (_artists.isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+                  child: Text(
+                    'Browse by artist',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                SizedBox(
+                  height: 48,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    itemCount: _artists.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
+                    itemBuilder: (_, i) {
+                      final artist = _artists[i];
+                      return ActionChip(
+                        avatar: const Icon(Icons.person_outline, size: 18),
+                        label: Text(artist.name),
+                        onPressed: () => _push(
+                          context,
+                          SongListScreen(
+                            title: artist.name,
+                            emptyText: 'No songs from this artist.',
+                            select: (_) => artist.tracks,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+              if (picks.isNotEmpty) ...[
+                _feedHeading(context, 'Quick Picks', 'Jump back in'),
+                _QuickPicksGrid(songs: picks),
+              ],
+              _feedHeading(
+                context,
+                query.isEmpty ? title : 'Search results',
+                '${tracks.length} ${tracks.length == 1 ? 'song' : 'songs'}',
+                trailing: category != null
+                    ? IconButton(
+                        tooltip: 'Category options',
+                        icon: const Icon(Icons.more_vert_rounded),
+                        onPressed: () => _categoryActions(context, category),
+                      )
+                    : playlist != null
+                    ? IconButton(
+                        tooltip: 'Open playlist',
+                        icon: const Icon(Icons.edit_note_rounded),
+                        onPressed: () =>
+                            _push(context, PlaylistScreen(id: playlist.id)),
+                      )
+                    : null,
+              ),
+              if (tracks.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+                  child: Text(
+                    query.isEmpty
+                        ? 'Nothing here yet.'
+                        : 'No songs match "${_search.text.trim()}".',
+                    style: TextStyle(color: _muted(context)),
+                  ),
+                ),
             ],
           ),
         ),
-
-        // LIKED SONGS HERO ITEM
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 20,
-            vertical: 4,
-          ),
-          leading: Container(
-            width: 54,
-            height: 54,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF8B5CF6), Color(0xFF4C1D95)],
-              ),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(
-              Icons.favorite_rounded,
-              color: Colors.white,
-              size: 26,
-            ),
-          ),
-          title: const Text(
-            'Liked Songs',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-          ),
-          subtitle: Text(
-            'Community · ${music.communitySongs(MediaCollection.likedSongs).length} songs',
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-          ),
-          onTap: () => _push(
-            context,
-            SongListScreen(
-              title: 'Liked Songs',
-              emptyText: 'Songs liked by the community show up here.',
-              select: (m) => m.communitySongs(MediaCollection.likedSongs),
-            ),
-          ),
+        SliverList.builder(
+          itemCount: tracks.length,
+          itemBuilder: (_, i) => SongTile(song: tracks[i], queue: tracks),
         ),
-
-        // DOWNLOADS ITEM
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 20,
-            vertical: 4,
-          ),
-          leading: Container(
-            width: 54,
-            height: 54,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF10B981), Color(0xFF064E3B)],
-              ),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(
-              Icons.download_done_rounded,
-              color: Colors.white,
-              size: 26,
-            ),
-          ),
-          title: const Text(
-            'Downloaded Music',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-          ),
-          subtitle: Text(
-            'Playlist · ${music.downloadedSongs.length} songs offline',
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-          ),
-          onTap: () => _push(
-            context,
-            SongListScreen(
-              title: 'Downloads',
-              emptyText: 'No downloaded songs.',
-              select: (m) => m.downloadedSongs,
-            ),
-          ),
-        ),
-
-        // LOCAL DEVICE IMPORTS
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 20,
-            vertical: 4,
-          ),
-          leading: Container(
-            width: 54,
-            height: 54,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF3B82F6), Color(0xFF1E3A8A)],
-              ),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(
-              Icons.folder_copy_rounded,
-              color: Colors.white,
-              size: 26,
-            ),
-          ),
-          title: const Text(
-            'Device Imports',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-          ),
-          subtitle: Text(
-            'Local files · ${music.savedMedia.length} tracks',
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-          ),
-          onTap: () => _push(context, const SharedImportScreen(source: '')),
-        ),
-
-        const Padding(
-          padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
-          child: Text(
-            'Playlists & Categories',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-          ),
-        ),
-
-        for (final cat in music.categories)
-          ListTile(
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 20,
-              vertical: 4,
-            ),
-            leading: Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainer,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(
-                Icons.queue_music_rounded,
-                color: NexMusic.violet,
-                size: 26,
-              ),
-            ),
-            title: Text(
-              cat.name,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-            ),
-            subtitle: Text(
-              'Playlist · ${music.songsIn(cat.id).length} songs',
-              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-            ),
-            trailing: IconButton(
-              icon: const Icon(Icons.more_vert_rounded),
-              onPressed: () => _categoryActions(context, cat),
-            ),
-            onTap: () => _push(
-              context,
-              SongListScreen(
-                title: cat.name,
-                emptyText: 'No songs in this category.',
-                select: (m) => m.songsIn(cat.id),
-              ),
-            ),
-          ),
+        const SliverToBoxAdapter(child: SizedBox(height: 88)),
       ],
     );
   }
@@ -5787,6 +5897,8 @@ class ProfileScreen extends StatelessWidget {
               ),
             ),
           ),
+        const Divider(),
+        const PersonalLibraryPanel(),
         const Divider(),
         _NavRow(
           icon: Icons.lock_outline_rounded,
