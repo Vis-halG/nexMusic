@@ -2197,6 +2197,9 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
                   mainAxisSpacing: 10,
                   mainAxisExtent: 60,
                 ),
+                // Without it the grid pads itself by the bars' height,
+                // which the page reports so it can scroll behind them.
+                padding: EdgeInsets.zero,
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
