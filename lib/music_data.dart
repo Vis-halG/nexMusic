@@ -1,8 +1,7 @@
 /// Prefix for ids of private library items wrapped in a [Song] for playback.
 const privateSongPrefix = 'private-';
 
-/// A shared category. Any signed-in user can create one; only its creator can
-/// rename or delete it.
+/// A shared category. Any signed-in user can create, rename or delete one.
 class MusicCategory {
   const MusicCategory({
     required this.id,
@@ -24,6 +23,7 @@ class Song {
     required this.kind,
     required this.url,
     this.categoryId = '',
+    this.extraCategoryIds = const [],
     this.ownerUid = '',
     this.ownerName = '',
     this.artist = '',
@@ -45,7 +45,21 @@ class Song {
     this.createdAt,
   });
   final String id, title, kind, url, categoryId, ownerUid, ownerName;
+
+  /// Categories the song is also listed in, besides its main [categoryId].
+  /// Older app versions only know the main one.
+  final List<String> extraCategoryIds;
   final String artist, artworkUrl, providerId, sourceId;
+
+  /// Every category the song is listed in, the main one first.
+  List<String> get categoryIds => [
+    if (categoryId.isNotEmpty) categoryId,
+    for (final id in extraCategoryIds)
+      if (id != categoryId) id,
+  ];
+
+  bool inCategory(String id) =>
+      categoryId == id || extraCategoryIds.contains(id);
   final String album,
       albumId,
       artistId,
@@ -76,6 +90,7 @@ class Song {
     String? kind,
     String? url,
     String? categoryId,
+    List<String>? extraCategoryIds,
     String? ownerUid,
     String? ownerName,
     String? artist,
@@ -101,6 +116,7 @@ class Song {
     kind: kind ?? this.kind,
     url: url ?? this.url,
     categoryId: categoryId ?? this.categoryId,
+    extraCategoryIds: extraCategoryIds ?? this.extraCategoryIds,
     ownerUid: ownerUid ?? this.ownerUid,
     ownerName: ownerName ?? this.ownerName,
     artist: artist ?? this.artist,
@@ -128,6 +144,7 @@ class Song {
     'kind': kind,
     'url': url,
     'categoryId': categoryId,
+    'categoryIds': categoryIds,
     'ownerUid': ownerUid,
     'ownerName': ownerName,
     'artist': artist,
@@ -149,6 +166,13 @@ class Song {
     'createdAt': createdAt?.millisecondsSinceEpoch,
   };
 
+  /// The ids in a stored `categoryIds` list other than [main].
+  static List<String> extraCategories(Object? stored, String main) => [
+    if (stored is List)
+      for (final id in stored.whereType<String>().toSet())
+        if (id.isNotEmpty && id != main) id,
+  ];
+
   /// Reads a song saved by [toJson], or returns null for an unusable entry.
   static Song? fromJson(Map<String, dynamic> json) {
     final id = json['id'];
@@ -162,12 +186,14 @@ class Song {
       return null;
     }
     final createdAt = json['createdAt'];
+    final categoryId = json['categoryId'] as String? ?? '';
     return Song(
       id: id,
       title: json['title'] as String? ?? 'Untitled',
       kind: json['kind'] == 'video' ? 'video' : 'audio',
       url: url,
-      categoryId: json['categoryId'] as String? ?? '',
+      categoryId: categoryId,
+      extraCategoryIds: extraCategories(json['categoryIds'], categoryId),
       ownerUid: json['ownerUid'] as String? ?? '',
       ownerName: json['ownerName'] as String? ?? '',
       artist: json['artist'] as String? ?? '',
@@ -250,6 +276,9 @@ class UploadItem {
   }
 
   String categoryId = '';
+
+  /// More categories to list the upload in, besides [categoryId].
+  List<String> extraCategoryIds = const [];
   UploadStatus status = UploadStatus.queued;
 
   /// Fraction (0–1) of this file sent to Cloudinary.

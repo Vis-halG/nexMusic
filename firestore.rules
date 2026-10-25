@@ -55,8 +55,19 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/categories/$(categoryId));
     }
 
-    // Shared categories: any signed-in user can create one; only its creator
-    // can rename or delete it.
+    // A song can also be listed in more categories. The optional list holds
+    // every one of them, its main categoryId included; older app versions
+    // write only categoryId.
+    function validCategoryList(data) {
+      return !('categoryIds' in data)
+        || (data.categoryIds is list
+          && data.categoryIds.size() >= 1
+          && data.categoryIds.size() <= 20
+          && data.categoryId in data.categoryIds);
+    }
+
+    // Shared categories: any signed-in user can create, rename or delete one.
+    // ownerUid only records who created it.
     match /categories/{categoryId} {
       allow read: if signedIn();
       allow create: if signedIn()
@@ -64,10 +75,10 @@ service cloud.firestore {
         && request.resource.data.ownerUid == request.auth.uid
         && validCategoryName(request.resource.data.name)
         && request.resource.data.createdAt == request.time;
-      allow update: if isOwner(resource.data.ownerUid)
+      allow update: if signedIn()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
         && validCategoryName(request.resource.data.name);
-      allow delete: if isOwner(resource.data.ownerUid);
+      allow delete: if signedIn();
     }
 
     // Listing of public uploads stored on Cloudinary. Every signed-in listener
@@ -78,14 +89,15 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn()
         && request.resource.data.keys().hasOnly([
-          'title', 'kind', 'categoryId', 'url', 'publicId', 'sizeBytes',
-          'durationMs', 'ownerUid', 'ownerName', 'createdAt', 'updatedAt',
-          'deleted'
+          'title', 'kind', 'categoryId', 'categoryIds', 'url', 'publicId',
+          'sizeBytes', 'durationMs', 'ownerUid', 'ownerName', 'createdAt',
+          'updatedAt', 'deleted'
         ])
         && request.resource.data.ownerUid == request.auth.uid
         && validTitle(request.resource.data.title)
         && request.resource.data.kind in ['audio', 'video']
         && categoryExists(request.resource.data.categoryId)
+        && validCategoryList(request.resource.data)
         && request.resource.data.url is string
         && request.resource.data.url.matches('https://res[.]cloudinary[.]com/.+')
         && request.resource.data.publicId is string
@@ -101,9 +113,10 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && request.resource.data.deleted == false;
       allow update: if signedIn()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'categoryId', 'deleted', 'updatedAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'categoryId', 'categoryIds', 'deleted', 'updatedAt'])
         && validTitle(request.resource.data.title)
         && categoryExists(request.resource.data.categoryId)
+        && validCategoryList(request.resource.data)
         && request.resource.data.deleted is bool
         && request.resource.data.updatedAt == request.time;
       allow delete: if false;

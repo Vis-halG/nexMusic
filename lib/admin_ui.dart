@@ -13,6 +13,9 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
   String _filter = 'All', _cursor = '';
   String? _error;
   bool _loading = true;
+
+  /// Only the owner can let others manage users.
+  bool _canGrant = false;
   int _request = 0;
   Timer? _refresh;
 
@@ -65,6 +68,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
             row.uid: row,
         }.values.toList()..sort((a, b) => b.lastLogin.compareTo(a.lastLogin));
         _cursor = result['nextPageToken'] as String? ?? '';
+        _canGrant = result['canGrant'] == true;
       });
     } catch (error) {
       if (mounted && request == _request) {
@@ -110,6 +114,40 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
       if (!mounted || account != music.personal) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(blocked ? 'User blocked' : 'User unblocked')),
+      );
+    } catch (error) {
+      if (mounted && account == music.personal) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$error'.replaceFirst('Bad state: ', ''))),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy.remove(user.uid));
+        await _load();
+      }
+    }
+  }
+
+  Future<void> _setManager(AppUser user, bool manager) async {
+    if (_busy.contains(user.uid) || user.protected || !_canGrant) return;
+    final music = context.read<MusicController>(), account = music.personal;
+    setState(() => _busy.add(user.uid));
+    try {
+      await music.adminRequest(
+        '/admin/users/manager',
+        body: {'uid': user.uid, 'manager': manager},
+      );
+      if (!mounted || account != music.personal) return;
+      final who = user.name.isEmpty ? user.email : user.name;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            manager
+                ? '$who can now manage users'
+                : '$who can no longer manage users',
+          ),
+        ),
       );
     } catch (error) {
       if (mounted && account == music.personal) {
@@ -253,7 +291,11 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                           if (user.email.isNotEmpty) SelectableText(user.email),
                           const SizedBox(height: 6),
                           Text(
-                            '$status${user.protected ? ' · Administrator' : ''}',
+                            '$status${user.protected
+                                ? ' · Administrator'
+                                : user.manager
+                                ? ' · Manages users'
+                                : ''}',
                           ),
                           Text(
                             'Last login: ${_time(user.lastLogin)}',
@@ -271,7 +313,17 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                               color: _muted(context),
                             ),
                           ),
-                          if (!user.protected)
+                          if (_canGrant && !user.protected)
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Can manage users'),
+                              value: user.manager,
+                              onChanged: _busy.contains(user.uid)
+                                  ? null
+                                  : (value) => _setManager(user, value),
+                            ),
+                          // Only the owner can block someone who manages users.
+                          if (!user.protected && (_canGrant || !user.manager))
                             Align(
                               alignment: Alignment.centerRight,
                               child: _busy.contains(user.uid)

@@ -228,39 +228,15 @@ class _UpdateSheet extends StatefulWidget {
 }
 
 class _UpdateSheetState extends State<_UpdateSheet> {
-  bool _downloading = false;
-  double _fraction = 0.0;
-  String? _error;
-
-  Future<void> _startUpdate() async {
-    setState(() {
-      _downloading = true;
-      _fraction = 0.0;
-      _error = null;
-    });
-    final phone = context.read<MusicController>().phone;
-    final service = AppUpdateService();
-    final file = await service.downloadApk(
-      widget.info,
-      onProgress: (progress) {
-        if (mounted) setState(() => _fraction = progress);
-      },
+  /// Downloads in the background; the bar at the bottom shows progress.
+  void _startUpdate() {
+    unawaited(
+      UpdateDownload.start(
+        widget.info,
+        phone: context.read<MusicController>().phone,
+      ),
     );
-    if (!mounted) return;
-    if (file == null) {
-      setState(() {
-        _downloading = false;
-        _error = 'Download failed. Tap to try again or open in browser.';
-      });
-      return;
-    }
-    setState(() => _downloading = false);
-    final installed = await service.installUpdate(file, phone);
-    if (!installed && mounted) {
-      await phone?.openUrl(widget.info.downloadUrl);
-    } else if (mounted) {
-      Navigator.of(context).pop();
-    }
+    Navigator.of(context).pop();
   }
 
   @override
@@ -345,78 +321,243 @@ class _UpdateSheetState extends State<_UpdateSheet> {
               ),
               const SizedBox(height: 16),
             ],
-            if (_error != null) ...[
-              Text(
-                _error!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-            ],
-            if (_downloading) ...[
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Downloading update…',
-                    style: TextStyle(fontSize: 13, color: mutedColor),
-                  ),
-                  Text(
-                    '${(_fraction * 100).round()}%',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: NexMusic.violet,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: _fraction > 0 ? _fraction : null,
-                  minHeight: 6,
-                  color: NexMusic.violet,
-                  backgroundColor: NexMusic.violet.withValues(alpha: 0.15),
-                ),
-              ),
-              const SizedBox(height: 16),
-            ] else ...[
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: FilledButton.icon(
-                  onPressed: _startUpdate,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: NexMusic.violet,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  icon: const Icon(Icons.download_rounded),
-                  label: const Text(
-                    'Update Now',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: FilledButton.icon(
+                onPressed: _startUpdate,
+                style: FilledButton.styleFrom(
+                  backgroundColor: NexMusic.violet,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Center(
-                child: TextButton(
-                  onPressed: () {
-                    widget.onDismiss?.call();
-                    Navigator.of(context).pop();
-                  },
-                  child: Text('Later', style: TextStyle(color: mutedColor)),
+                icon: const Icon(Icons.download_rounded),
+                label: const Text(
+                  'Update Now',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                 ),
               ),
-            ],
+            ),
+            const SizedBox(height: 4),
+            Center(
+              child: Text(
+                'Keeps downloading while you use the app.',
+                style: TextStyle(fontSize: 12, color: mutedColor),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Center(
+              child: TextButton(
+                onPressed: () {
+                  widget.onDismiss?.call();
+                  Navigator.of(context).pop();
+                },
+                child: Text('Later', style: TextStyle(color: mutedColor)),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
+}
+
+/// Puts a bar under every page while an update downloads, so the app stays
+/// usable and the progress stays in view.
+class UpdateDownloadHost extends StatelessWidget {
+  const UpdateDownloadHost({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<UpdateDownload?>(
+    valueListenable: UpdateDownload.current,
+    builder: (context, download, _) {
+      // The keyboard would cover the bar anyway.
+      final show =
+          download != null && MediaQuery.viewInsetsOf(context).bottom == 0;
+      // The same widgets either way, so the pages keep their state when
+      // the bar comes and goes.
+      return Column(
+        children: [
+          Expanded(
+            child: MediaQuery.removePadding(
+              context: context,
+              removeBottom: show,
+              child: child,
+            ),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: show
+                ? _UpdateDownloadBar(download: download)
+                : const SizedBox(width: double.infinity),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+/// Hides the bar until the next update, like Later on the update sheet;
+/// Profile → Check for updates brings it back.
+void _hideUpdateBar(BuildContext context, UpdateDownload download) {
+  unawaited(
+    context.read<MusicController>().preferences.setString(
+      'dismissed_update_tag',
+      download.info.tagName,
+    ),
+  );
+  download.dismiss();
+}
+
+class _UpdateDownloadBar extends StatelessWidget {
+  const _UpdateDownloadBar({required this.download});
+  final UpdateDownload download;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: download,
+    builder: (context, _) {
+      final scheme = Theme.of(context).colorScheme;
+      final info = download.info;
+      final sizes = download.total > 0
+          ? '${_fileSize(download.received)} of ${_fileSize(download.total)}'
+          : _fileSize(download.received);
+      final percent = download.fraction == null
+          ? ''
+          : ' · ${(download.fraction! * 100).floor()}%';
+      final (icon, title, detail) = switch (download.state) {
+        UpdateDownloadState.downloading => (
+          Icons.downloading_rounded,
+          'Downloading update v${info.versionName}',
+          '$sizes$percent',
+        ),
+        UpdateDownloadState.waiting => (
+          Icons.wifi_off_rounded,
+          download.message ?? 'Resuming…',
+          '$sizes$percent · resumes by itself',
+        ),
+        UpdateDownloadState.verifying => (
+          Icons.verified_outlined,
+          'Checking the update…',
+          sizes,
+        ),
+        UpdateDownloadState.ready => (
+          Icons.system_update_rounded,
+          'Update v${info.versionName} is ready',
+          'Tap Install to finish updating',
+        ),
+        UpdateDownloadState.failed => (
+          Icons.error_outline_rounded,
+          'Update download stopped',
+          download.message ?? 'Try again.',
+        ),
+      };
+      // No tooltips here: this bar sits outside the navigator's overlay.
+      final actions = switch (download.state) {
+        UpdateDownloadState.ready => [
+          TextButton(
+            onPressed: download.install,
+            style: TextButton.styleFrom(foregroundColor: NexMusic.violet),
+            child: const Text(
+              'Install',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          IconButton(
+            onPressed: () => _hideUpdateBar(context, download),
+            icon: const Icon(Icons.close_rounded),
+          ),
+        ],
+        UpdateDownloadState.failed => [
+          TextButton(
+            onPressed: () => UpdateDownload.start(
+              info,
+              phone: context.read<MusicController>().phone,
+            ),
+            child: const Text('Retry'),
+          ),
+          IconButton(
+            onPressed: () => _hideUpdateBar(context, download),
+            icon: const Icon(Icons.close_rounded),
+          ),
+        ],
+        UpdateDownloadState.verifying => const <Widget>[],
+        _ => [
+          TextButton(onPressed: download.cancel, child: const Text('Cancel')),
+        ],
+      };
+      final waiting = download.state == UpdateDownloadState.waiting;
+      return Material(
+        color: scheme.surfaceContainerHigh,
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LinearProgressIndicator(
+                value: download.state == UpdateDownloadState.verifying
+                    ? null
+                    : download.state == UpdateDownloadState.ready
+                    ? 1
+                    : download.fraction,
+                minHeight: 3,
+                color: waiting ? scheme.outline : NexMusic.violet,
+                backgroundColor: NexMusic.violet.withValues(alpha: 0.15),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 4, 8),
+                child: Row(
+                  children: [
+                    Icon(
+                      icon,
+                      size: 22,
+                      color: download.state == UpdateDownloadState.failed
+                          ? scheme.error
+                          : NexMusic.violet,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            detail,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    ...actions,
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
 }
 
 Future<String?> _nameDialog(
@@ -592,7 +733,8 @@ class _Pill extends StatelessWidget {
   }
 }
 
-/// Required single choice (category or folder) with a trailing "new" pill.
+/// Required choice (category or folder) with a trailing "new" pill. With
+/// [selectedIds] several can be chosen, and [onChanged] toggles one.
 class _ChoicePicker extends StatelessWidget {
   const _ChoicePicker({
     required this.label,
@@ -601,11 +743,13 @@ class _ChoicePicker extends StatelessWidget {
     required this.onChanged,
     required this.onCreate,
     required this.createLabel,
+    this.selectedIds,
     this.onManage,
   });
   final String label, createLabel;
   final List<({String id, String name})> options;
   final String? selectedId;
+  final List<String>? selectedIds;
   final ValueChanged<String> onChanged;
   final Future<String?> Function() onCreate;
 
@@ -643,7 +787,8 @@ class _ChoicePicker extends StatelessWidget {
           for (final option in options)
             _Pill(
               label: option.name,
-              selected: option.id == selectedId,
+              selected:
+                  selectedIds?.contains(option.id) ?? option.id == selectedId,
               onTap: () => onChanged(option.id),
             ),
           _Pill(
@@ -1217,11 +1362,19 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
       if (!mounted) return;
       try {
         final controller = context.read<MusicController>();
+        // Files of the build now installed only take up space.
+        final installed = AppUpdateService.parseVersion(
+          controller.installedVersion,
+        ).build;
+        if (installed > 0) unawaited(UpdateDownload.removeOld(installed));
         final update = await AppUpdateService().checkForUpdate(
           phone: controller.phone,
         );
         debugPrint('Auto update check result: ${update?.displayVersion}');
         if (update != null && mounted) {
+          if (UpdateDownload.current.value?.info.tagName == update.tagName) {
+            return;
+          }
           final lastDismissed = controller.preferences.getString(
             'dismissed_update_tag',
           );
@@ -1229,6 +1382,14 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
             debugPrint('Update ${update.tagName} was dismissed; skipping.');
             return;
           }
+          // A download cut short when the app closed carries on by itself.
+          if (await UpdateDownload.started(update)) {
+            if (mounted) {
+              unawaited(UpdateDownload.start(update, phone: controller.phone));
+            }
+            return;
+          }
+          if (!mounted) return;
           _showUpdateSheet(
             context,
             update,
@@ -1365,6 +1526,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
 
   int _currentTabIndex = 0;
   var _streamKey = GlobalKey<_SpotifyStreamViewState>();
+  final _homeKey = GlobalKey<_SpotifyHomeViewState>();
   final _libraryKey = GlobalKey<_SpotifyLibraryViewState>();
   _SpotifyStreamView? _streamView;
   Object? _streamAccount;
@@ -1402,7 +1564,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
       1 => const SizedBox.shrink(),
       2 => _SpotifyLibraryView(key: _libraryKey),
       3 => const ProfileScreen(showAppBar: false),
-      _ => const _SpotifyHomeView(),
+      _ => _SpotifyHomeView(key: _homeKey),
     };
 
     return _SongSelectionScaffold(
@@ -1481,11 +1643,14 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
 
   void _playRandomSong(BuildContext context) {
     final music = context.read<MusicController>();
-    final librarySongs = _currentTabIndex == 2
-        ? _libraryKey.currentState?.shuffleSongs
-        : null;
-    if (librarySongs != null) {
-      unawaited(music.playRandomFrom(librarySongs));
+    // A chosen category or chip narrows the shuffle to its songs.
+    final listed = switch (_currentTabIndex) {
+      0 => _homeKey.currentState?.shuffleSongs,
+      2 => _libraryKey.currentState?.shuffleSongs,
+      _ => null,
+    };
+    if (listed != null) {
+      unawaited(music.playRandomFrom(listed));
       return;
     }
     final scope = switch (_currentTabIndex) {
@@ -1593,9 +1758,7 @@ class _SpotifySongCard extends StatelessWidget {
                     width: 36,
                     height: 36,
                     decoration: BoxDecoration(
-                      color: isCurrent
-                          ? NexMusic.violet
-                          : const Color(0xFF1DB954),
+                      color: NexMusic.violet,
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
@@ -1842,7 +2005,7 @@ class _SpotifySection extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _SpotifyHomeView extends StatefulWidget {
-  const _SpotifyHomeView();
+  const _SpotifyHomeView({super.key});
 
   @override
   State<_SpotifyHomeView> createState() => _SpotifyHomeViewState();
@@ -1850,6 +2013,16 @@ class _SpotifyHomeView extends StatefulWidget {
 
 class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
   String? _selectedCategory;
+
+  /// The selected category's songs, for the shuffle button.
+  List<Song>? get shuffleSongs => _selectedCategory == null
+      ? null
+      : context.read<MusicController>().songsIn(_selectedCategory);
+
+  void _selectCategory(String id) {
+    context.read<SongSelection?>()?.close();
+    setState(() => _selectedCategory = id == 'all' ? null : id);
+  }
 
   @override
   void initState() {
@@ -1906,43 +2079,32 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
           ),
         ),
 
-        // Horizontal Category Filter Pills
+        // Category pills. Holding one moves it, so category options are on
+        // the heading of the selected category.
         SliverToBoxAdapter(
-          child: SizedBox(
-            height: 48,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-              children: [
-                _Pill(
-                  label: 'All',
-                  selected: _selectedCategory == null,
-                  onTap: () {
-                    context.read<SongSelection?>()?.close();
-                    setState(() => _selectedCategory = null);
-                  },
-                ),
-                for (final cat in music.categories)
-                  _Pill(
-                    label: cat.name,
-                    selected: _selectedCategory == cat.id,
-                    onTap: () {
-                      context.read<SongSelection?>()?.close();
-                      setState(() => _selectedCategory = cat.id);
-                    },
-                    onLongPress: () => _categoryActions(context, cat),
-                  ),
-                _Pill(
-                  icon: Icons.add_rounded,
-                  label: 'New',
-                  onTap: () async {
-                    final cat = await _createCategory(context);
-                    if (cat != null && mounted) {
-                      setState(() => _selectedCategory = cat.id);
-                    }
-                  },
-                ),
-              ],
+          child: _ReorderableChips(
+            orderKey: 'home_pill_order',
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+            chips: [
+              ('all', 'All'),
+              for (final cat in music.categories) (cat.id, cat.name),
+            ],
+            selected: _selectedCategory ?? 'all',
+            onSelected: _selectCategory,
+            chipBuilder: (id, label, selected) => _Pill(
+              label: label,
+              selected: selected,
+              onTap: () => _selectCategory(id),
+            ),
+            footer: _Pill(
+              icon: Icons.add_rounded,
+              label: 'New',
+              onTap: () async {
+                final cat = await _createCategory(context);
+                if (cat != null && mounted) {
+                  setState(() => _selectedCategory = cat.id);
+                }
+              },
             ),
           ),
         ),
@@ -1980,32 +2142,25 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    music.categoryName(_selectedCategory!),
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
+                  Expanded(
+                    child: Text(
+                      music.categoryName(_selectedCategory!),
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
                       ),
-                      minimumSize: Size.zero,
                     ),
-                    onPressed: () {
-                      final songs = music.songsIn(_selectedCategory);
-                      if (songs.isNotEmpty) {
-                        _openSong(context, songs.first, queue: songs);
-                      }
-                    },
-                    icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                    label: const Text('Play'),
                   ),
+                  if (music.categories
+                          .where((c) => c.id == _selectedCategory)
+                          .firstOrNull
+                      case final category?)
+                    IconButton(
+                      tooltip: 'Category options',
+                      icon: const Icon(Icons.more_vert_rounded),
+                      onPressed: () => _categoryActions(context, category),
+                    ),
                 ],
               ),
             ),
@@ -2492,9 +2647,7 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
                 : _songs)
             .where(music.personal.accepts)
             .toList();
-    final artists = groupSongsByArtist(
-      tracks,
-    ).where((a) => !a.unknown).take(12).toList();
+    final artists = _artistsIn(tracks);
     return NotificationListener<ScrollNotification>(
       onNotification: (scrollInfo) {
         if (scrollInfo.depth == 0 && scrollInfo.metrics.axis == Axis.vertical) {
@@ -2548,50 +2701,24 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
                   ),
                 ),
                 if (_search.text.trim().isEmpty)
-                  SizedBox(
-                    height: 48,
-                    child: ListView.separated(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      scrollDirection: Axis.horizontal,
-                      itemCount: _categories.length,
-                      separatorBuilder: (_, _) => const SizedBox(width: 8),
-                      itemBuilder: (_, i) => ChoiceChip(
-                        label: Text(_categories[i]),
-                        selected: _category == _categories[i],
-                        onSelected: (_) {
-                          if (_category == _categories[i]) return;
-                          setState(() => _category = _categories[i]);
-                          _load();
-                        },
-                      ),
-                    ),
+                  _ReorderableChips(
+                    orderKey: 'stream_chip_order',
+                    chips: [for (final name in _categories) (name, name)],
+                    selected: _category,
+                    onSelected: (name) {
+                      if (_category == name) return;
+                      setState(() => _category = name);
+                      _load();
+                    },
                   ),
                 if (artists.isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
-                    child: Text(
-                      'Browse by artist',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  SizedBox(
-                    height: 48,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      itemCount: artists.length,
-                      separatorBuilder: (_, _) => const SizedBox(width: 8),
-                      itemBuilder: (_, i) => ActionChip(
-                        avatar: const Icon(Icons.person_outline, size: 18),
-                        label: Text(artists[i].name),
-                        onPressed: () => _push(
-                          context,
-                          ArtistAlbumScreen(
-                            song: artists[i].tracks.first.copyWith(
-                              artist: artists[i].name,
-                            ),
-                          ),
-                        ),
+                  _heading('Artists', 'Everyone in this feed'),
+                  _ArtistsGrid(
+                    artists: artists,
+                    onOpen: (artist) => _push(
+                      context,
+                      ArtistAlbumScreen(
+                        song: artist.tracks.first.copyWith(artist: artist.name),
                       ),
                     ),
                   ),
@@ -2710,28 +2837,238 @@ class _TabTitle extends StatelessWidget {
   );
 }
 
-/// Three rows of songs that scroll sideways.
+/// Choice chips the listener can rearrange by holding one and dragging it.
+/// The order is remembered per account under [orderKey]; chips added later
+/// go at the end.
+class _ReorderableChips extends StatefulWidget {
+  const _ReorderableChips({
+    required this.orderKey,
+    required this.chips,
+    required this.selected,
+    required this.onSelected,
+    this.footer,
+    this.chipBuilder,
+    this.padding = const EdgeInsets.symmetric(horizontal: 20),
+  });
+  final String orderKey;
+
+  /// Chip ids and labels in their default order.
+  final List<(String, String)> chips;
+  final String selected;
+  final ValueChanged<String> onSelected;
+  final Widget? footer;
+
+  /// Draws a chip with its own spacing, instead of a [ChoiceChip].
+  final Widget Function(String id, String label, bool selected)? chipBuilder;
+  final EdgeInsets padding;
+
+  @override
+  State<_ReorderableChips> createState() => _ReorderableChipsState();
+}
+
+class _ReorderableChipsState extends State<_ReorderableChips> {
+  @override
+  Widget build(BuildContext context) {
+    final music = context.read<MusicController>();
+    final key = '${widget.orderKey}:${music.personal.uid}';
+    final saved = music.preferences.getStringList(key) ?? const <String>[];
+    final place = {for (var i = 0; i < saved.length; i++) saved[i]: i};
+    final defaults = widget.chips;
+    int rank(int i) => place[defaults[i].$1] ?? saved.length + i;
+    final chips = [
+      for (final i in [
+        for (var i = 0; i < defaults.length; i++) i,
+      ]..sort((a, b) => rank(a).compareTo(rank(b))))
+        defaults[i],
+    ];
+    return SizedBox(
+      height: 48,
+      child: ReorderableListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: widget.padding,
+        // Holding a chip picks it up; a tap still selects it.
+        buildDefaultDragHandles: false,
+        itemCount: chips.length,
+        onReorderItem: (from, to) {
+          final ids = [for (final chip in chips) chip.$1];
+          ids.insert(to, ids.removeAt(from));
+          unawaited(music.preferences.setStringList(key, ids));
+          setState(() {});
+        },
+        proxyDecorator: (child, _, _) => Transform.scale(
+          scale: 1.06,
+          child: Material(type: MaterialType.transparency, child: child),
+        ),
+        footer: widget.footer,
+        itemBuilder: (_, i) {
+          final (id, label) = chips[i];
+          final selected = widget.selected == id;
+          return ReorderableDelayedDragStartListener(
+            key: ValueKey(id),
+            index: i,
+            child:
+                widget.chipBuilder?.call(id, label, selected) ??
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(label),
+                    selected: selected,
+                    onSelected: (_) => widget.onSelected(id),
+                  ),
+                ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Up to three rows of tiles that scroll sideways, as Quick Picks shows.
+class _SidewaysGrid extends StatelessWidget {
+  const _SidewaysGrid({required this.count, required this.itemBuilder});
+  final int count;
+  final IndexedWidgetBuilder itemBuilder;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = math.min(3, count);
+    return SizedBox(
+      height: rows * 70.0 + (rows - 1) * 4,
+      child: GridView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: math.max(1, rows),
+          mainAxisExtent: 290,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 4,
+        ),
+        itemCount: count,
+        itemBuilder: itemBuilder,
+      ),
+    );
+  }
+}
+
 class _QuickPicksGrid extends StatelessWidget {
   const _QuickPicksGrid({required this.songs});
   final List<Song> songs;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-    height: 218,
-    child: GridView.builder(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        mainAxisExtent: 290,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 4,
-      ),
-      itemCount: songs.length,
-      itemBuilder: (_, i) => _QuickPickTile(song: songs[i], queue: songs),
-    ),
+  Widget build(BuildContext context) => _SidewaysGrid(
+    count: songs.length,
+    itemBuilder: (_, i) => _QuickPickTile(song: songs[i], queue: songs),
   );
 }
+
+/// Every artist in a list, laid out like Quick Picks.
+class _ArtistsGrid extends StatelessWidget {
+  const _ArtistsGrid({required this.artists, required this.onOpen});
+  final List<MusicArtistCategory> artists;
+  final void Function(MusicArtistCategory artist) onOpen;
+
+  @override
+  Widget build(BuildContext context) => _SidewaysGrid(
+    count: artists.length,
+    itemBuilder: (_, i) =>
+        _ArtistTile(artist: artists[i], onTap: () => onOpen(artists[i])),
+  );
+}
+
+class _ArtistTile extends StatelessWidget {
+  const _ArtistTile({required this.artist, required this.onTap});
+  final MusicArtistCategory artist;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final count = artist.tracks.length;
+    final artwork = artist.tracks
+        .map((s) => s.artworkUrl)
+        .firstWhere((url) => url.isNotEmpty, orElse: () => '');
+    final initial = Center(
+      child: Text(
+        artist.name.isEmpty ? '?' : artist.name.characters.first.toUpperCase(),
+        style: const TextStyle(
+          color: NexMusic.violet,
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+        child: Row(
+          children: [
+            ClipOval(
+              child: Container(
+                width: 44,
+                height: 44,
+                color: NexMusic.violet.withValues(alpha: 0.14),
+                child: artwork.isEmpty
+                    ? initial
+                    : Image.network(
+                        artwork,
+                        fit: BoxFit.cover,
+                        cacheWidth:
+                            (44 * MediaQuery.devicePixelRatioOf(context))
+                                .ceil(),
+                        errorBuilder: (_, _, _) => initial,
+                      ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    artist.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$count ${count == 1 ? 'song' : 'songs'}',
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Play ${artist.name}',
+              icon: const Icon(Icons.play_arrow_rounded),
+              color: NexMusic.violet,
+              onPressed: () => unawaited(
+                context.read<MusicController>().playSelectedSongs(
+                  artist.tracks,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Named artists in [songs], most songs first.
+List<MusicArtistCategory> _artistsIn(Iterable<Song> songs) =>
+    groupSongsByArtist(songs).where((a) => !a.unknown).toList()
+      ..sort((a, b) => b.tracks.length.compareTo(a.tracks.length));
 
 class _QuickPickTile extends StatelessWidget {
   const _QuickPickTile({required this.song, required this.queue});
@@ -3110,8 +3447,6 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
   /// `all`, `liked`, `downloads`, `cat:<id>` or `pl:<id>`.
   String _chip = 'all';
   List<Song> _tracks = const [];
-  String _artistsFor = '';
-  List<MusicArtistCategory> _artists = const [];
 
   /// The listed songs while a chip or search narrows them, for the shuffle
   /// button. Null means the whole library.
@@ -3168,14 +3503,6 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
                     .contains(query),
               )
               .toList();
-    // Grouping the whole library is slow, so only redo it when the list changes.
-    final artistsFor = '$_chip|$query|${tracks.length}';
-    if (_artistsFor != artistsFor) {
-      _artistsFor = artistsFor;
-      _artists = groupSongsByArtist(
-        tracks,
-      ).where((a) => !a.unknown).take(12).toList();
-    }
     final picks = _chip == 'all' && query.isEmpty
         ? music.recentSongs.where((s) => !s.isVideo).take(12).toList()
         : const <Song>[];
@@ -3184,12 +3511,6 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
       'downloads' => 'Downloads',
       _ => category?.name ?? playlist?.name ?? 'All songs',
     };
-
-    Widget chip(String id, String label) => ChoiceChip(
-      label: Text(label),
-      selected: _chip == id,
-      onSelected: (_) => _select(id),
-    );
 
     return CustomScrollView(
       key: const PageStorageKey('library'),
@@ -3224,74 +3545,31 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
                   ),
                 ),
               ),
-              SizedBox(
-                height: 48,
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  scrollDirection: Axis.horizontal,
-                  children: [
-                    for (final item in [
-                      chip('all', 'All'),
-                      chip('liked', 'Liked'),
-                      chip('downloads', 'Downloads'),
-                      for (final c in music.categories)
-                        GestureDetector(
-                          onLongPress: () => _categoryActions(context, c),
-                          child: chip('cat:${c.id}', c.name),
-                        ),
-                      for (final p in playlists)
-                        chip('pl:${p.id}', '${p.cover} ${p.name}'),
-                      ActionChip(
-                        avatar: const Icon(Icons.add_rounded, size: 18),
-                        label: const Text('New'),
-                        onPressed: () async {
-                          final created = await _createCategory(context);
-                          if (created != null && mounted) {
-                            _select('cat:${created.id}');
-                          }
-                        },
-                      ),
-                    ])
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: item,
-                      ),
-                  ],
+              // Category options sit on the list heading, since holding a
+              // chip now moves it.
+              _ReorderableChips(
+                orderKey: 'library_chip_order',
+                chips: [
+                  ('all', 'All'),
+                  ('liked', 'Liked'),
+                  ('downloads', 'Downloads'),
+                  for (final c in music.categories) ('cat:${c.id}', c.name),
+                  for (final p in playlists)
+                    ('pl:${p.id}', '${p.cover} ${p.name}'),
+                ],
+                selected: _chip,
+                onSelected: _select,
+                footer: ActionChip(
+                  avatar: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('New'),
+                  onPressed: () async {
+                    final created = await _createCategory(context);
+                    if (created != null && mounted) {
+                      _select('cat:${created.id}');
+                    }
+                  },
                 ),
               ),
-              if (_artists.isNotEmpty) ...[
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
-                  child: Text(
-                    'Browse by artist',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                SizedBox(
-                  height: 48,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    itemCount: _artists.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 8),
-                    itemBuilder: (_, i) {
-                      final artist = _artists[i];
-                      return ActionChip(
-                        avatar: const Icon(Icons.person_outline, size: 18),
-                        label: Text(artist.name),
-                        onPressed: () => _push(
-                          context,
-                          SongListScreen(
-                            title: artist.name,
-                            emptyText: 'No songs from this artist.',
-                            select: (_) => artist.tracks,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
               if (picks.isNotEmpty) ...[
                 _feedHeading(context, 'Quick Picks', 'Jump back in'),
                 _QuickPicksGrid(songs: picks),
@@ -3556,15 +3834,6 @@ Future<void> _categoryActions(
   BuildContext context,
   MusicCategory category,
 ) async {
-  final music = context.read<MusicController>();
-  if (!music.ownsCategory(category)) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Only the person who created a category can change it.'),
-      ),
-    );
-    return;
-  }
   await _sheet(
     context,
     title: category.name,
@@ -3608,16 +3877,21 @@ Future<void> _deleteCategory(
   MusicCategory category,
 ) async {
   final music = context.read<MusicController>();
-  final count = music.songsIn(category.id).length;
+  // Songs also in other categories stay there; only the rest are deleted.
+  final count = music.songsOnlyIn(category).length;
+  final staying = music.songsIn(category.id).length - count;
   final songs = '$count song${count == 1 ? '' : 's'}';
+  final stay = staying == 0
+      ? ''
+      : ' $staying song${staying == 1 ? '' : 's'} also in other categories stay there.';
   final confirmed = await _confirm(
     context,
     title: count == 0
         ? 'Delete "${category.name}"?'
         : 'Delete "${category.name}" and its $songs?',
     body: count == 0
-        ? 'The category will be removed for everyone.'
-        : 'The category and all $songs in it will be removed for everyone. This cannot be undone.',
+        ? 'The category will be removed for everyone.$stay'
+        : 'The category and the $songs only in it will be removed for everyone. This cannot be undone.$stay',
     action: count == 0 ? 'Delete' : 'Delete all',
   );
   if (!confirmed || !context.mounted) return;
@@ -3629,8 +3903,8 @@ Future<void> _deleteCategory(
   await music.deleteCategory(category, withSongs: count > 0);
 }
 
-/// Every category with its song count. Categories this user created can be
-/// renamed or deleted; the rest are read-only.
+/// Every category with its song count. Anyone can rename or delete any of
+/// them.
 class CategoryManagerScreen extends StatelessWidget {
   const CategoryManagerScreen({super.key});
 
@@ -3672,8 +3946,6 @@ class _CategoryRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final music = context.read<MusicController>();
     final count = music.songsIn(category.id).length;
-    final owner = music.ownsCategory(category);
-    final songs = '$count song${count == 1 ? '' : 's'}';
     return ListTile(
       contentPadding: const EdgeInsets.only(left: 20, right: 8),
       title: Text(
@@ -3683,33 +3955,24 @@ class _CategoryRow extends StatelessWidget {
         style: const TextStyle(fontWeight: FontWeight.w500),
       ),
       subtitle: Text(
-        owner ? songs : '$songs · created by someone else',
+        '$count song${count == 1 ? '' : 's'}',
         style: TextStyle(color: _muted(context), fontSize: 12),
       ),
-      trailing: owner
-          ? Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  tooltip: 'Rename',
-                  onPressed: () => _renameCategory(context, category),
-                  icon: const Icon(Icons.edit_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Delete',
-                  onPressed: () => _deleteCategory(context, category),
-                  icon: const Icon(Icons.delete_outline_rounded),
-                ),
-              ],
-            )
-          : Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: Icon(
-                Icons.lock_outline_rounded,
-                size: 18,
-                color: _muted(context),
-              ),
-            ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: 'Rename',
+            onPressed: () => _renameCategory(context, category),
+            icon: const Icon(Icons.edit_outlined),
+          ),
+          IconButton(
+            tooltip: 'Delete',
+            onPressed: () => _deleteCategory(context, category),
+            icon: const Icon(Icons.delete_outline_rounded),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -3743,7 +4006,10 @@ class _UploadScreenState extends State<UploadScreen> {
   final _artist = TextEditingController();
   final List<UploadItem> _picked = [];
   final List<String> _rejected = [];
-  String? _categoryId;
+
+  /// Chosen categories; the first is the main one.
+  List<String> _categoryIds = [];
+  String? get _categoryId => _categoryIds.firstOrNull;
   SharedAudioJob? _job;
   SongFilePreparation? _streamPreparation;
   bool _streamBusy = false, _streamSubmitted = false;
@@ -4099,7 +4365,13 @@ class _UploadScreenState extends State<UploadScreen> {
       }
     }
     final items = List.of(_picked);
-    unawaited(_music.startUploads(items, categoryId: categoryId));
+    unawaited(
+      _music.startUploads(
+        items,
+        categoryId: categoryId,
+        extraCategoryIds: _categoryIds.skip(1).toList(),
+      ),
+    );
     // The batch is queued synchronously; keep the selection if it was refused.
     if (_music.uploads.isNotEmpty &&
         identical(_music.uploads.first, items.first)) {
@@ -4250,14 +4522,22 @@ class _UploadScreenState extends State<UploadScreen> {
           ],
           const SizedBox(height: 20),
           _ChoicePicker(
-            label: 'Category',
+            label: 'Categories · pick one or more',
             options: [
               for (final category in music.categories)
                 (id: category.id, name: category.name),
             ],
-            selectedId: _categoryId,
+            selectedId: null,
+            selectedIds: _categoryIds,
             onChanged: (id) {
-              setState(() => _categoryId = id);
+              setState(() {
+                _categoryIds = _categoryIds.contains(id)
+                    ? [
+                        for (final other in _categoryIds)
+                          if (other != id) other,
+                      ]
+                    : [..._categoryIds, id];
+              });
               _syncRequest();
             },
             onCreate: () async => (await _createCategory(context))?.id,
@@ -5031,7 +5311,9 @@ class _SongEditorScreenState extends State<SongEditorScreen> {
         context.read<MusicController>().personal.songArtists[widget.song.id] ??
         widget.song.artist,
   );
-  late String _categoryId = widget.song.categoryId;
+
+  /// The first is the song's main category.
+  late List<String> _categoryIds = widget.song.categoryIds;
   bool _saving = false;
 
   @override
@@ -5047,7 +5329,10 @@ class _SongEditorScreenState extends State<SongEditorScreen> {
     final saved = await music.updateSong(
       widget.song,
       title: _title.text,
-      categoryId: _categoryId,
+      categoryIds: [
+        for (final id in _categoryIds)
+          if (music.categoryById(id) != null) id,
+      ],
       artist: _artist.text,
     );
     if (!mounted) return;
@@ -5062,7 +5347,7 @@ class _SongEditorScreenState extends State<SongEditorScreen> {
     );
     final valid =
         _title.text.trim().isNotEmpty &&
-        categories.any((category) => category.id == _categoryId);
+        categories.any((category) => _categoryIds.contains(category.id));
     return Scaffold(
       appBar: AppBar(title: const Text('Edit song')),
       body: ListView(
@@ -5089,13 +5374,21 @@ class _SongEditorScreenState extends State<SongEditorScreen> {
           ),
           const SizedBox(height: 20),
           _ChoicePicker(
-            label: 'Category',
+            label: 'Categories · pick one or more',
             options: [
               for (final category in categories)
                 (id: category.id, name: category.name),
             ],
-            selectedId: _categoryId,
-            onChanged: (id) => setState(() => _categoryId = id),
+            selectedId: null,
+            selectedIds: _categoryIds,
+            onChanged: (id) => setState(() {
+              _categoryIds = _categoryIds.contains(id)
+                  ? [
+                      for (final other in _categoryIds)
+                        if (other != id) other,
+                    ]
+                  : [..._categoryIds, id];
+            }),
             onCreate: () async => (await _createCategory(context))?.id,
             createLabel: 'New category',
             onManage: () => _push(context, const CategoryManagerScreen()),
@@ -5149,9 +5442,10 @@ class MiniPlayer extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+      // A pill, with a round cover at its left end.
       child: Material(
         color: scheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(14),
+        shape: const StadiumBorder(),
         elevation: 6,
         shadowColor: Colors.black.withValues(alpha: 0.35),
         clipBehavior: Clip.antiAlias,
@@ -5161,15 +5455,17 @@ class MiniPlayer extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+                padding: const EdgeInsets.fromLTRB(8, 8, 6, 6),
                 child: Row(
                   children: [
-                    _Thumb(
-                      icon: song.isVideo
-                          ? Icons.play_arrow_rounded
-                          : Icons.music_note_rounded,
-                      imageUrl: song.artworkUrl,
-                      size: 44,
+                    ClipOval(
+                      child: _Thumb(
+                        icon: song.isVideo
+                            ? Icons.play_arrow_rounded
+                            : Icons.music_note_rounded,
+                        imageUrl: song.artworkUrl,
+                        size: 44,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -5252,13 +5548,22 @@ class MiniPlayer extends StatelessWidget {
                   final value = total <= 0
                       ? 0.0
                       : (position.inMilliseconds / total).clamp(0.0, 1.0);
-                  return LinearProgressIndicator(
-                    value: value,
-                    minHeight: 2.5,
-                    backgroundColor: scheme.outlineVariant.withValues(
-                      alpha: 0.3,
+                  // Kept on the straight part of the pill's bottom edge.
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(28, 0, 28, 4),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: LinearProgressIndicator(
+                        value: value,
+                        minHeight: 2.5,
+                        backgroundColor: scheme.outlineVariant.withValues(
+                          alpha: 0.3,
+                        ),
+                        valueColor: const AlwaysStoppedAnimation(
+                          NexMusic.violet,
+                        ),
+                      ),
                     ),
-                    valueColor: const AlwaysStoppedAnimation(NexMusic.violet),
                   );
                 },
               ),
@@ -5782,16 +6087,6 @@ class ProfileScreen extends StatelessWidget {
     final content = ListView(
       padding: EdgeInsets.only(top: showAppBar ? 0 : 16, bottom: 32),
       children: [
-        _NavRow(
-          icon: Icons.tune,
-          title: 'Listening settings',
-          onTap: () => _push(context, const ListeningSettingsScreen()),
-        ),
-        _NavRow(
-          icon: Icons.insights,
-          title: 'Your listening week',
-          onTap: () => _push(context, const ListeningStatsScreen()),
-        ),
         if (!showAppBar)
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 10, 20, 12),
@@ -5871,6 +6166,11 @@ class ProfileScreen extends StatelessWidget {
           ),
         ),
         _NavRow(
+          icon: Icons.insights,
+          title: 'Your listening week',
+          onTap: () => _push(context, const ListeningStatsScreen()),
+        ),
+        _NavRow(
           icon: Icons.history_rounded,
           title: 'Recently played',
           onTap: () => _push(
@@ -5913,14 +6213,11 @@ class ProfileScreen extends StatelessWidget {
           onTap: () => _push(context, const AdvanceScreen()),
         ),
         const Divider(),
-        if (music.phone != null)
-          SwitchListTile(
-            secondary: const Icon(Icons.notifications_outlined),
-            title: const Text('Activity notifications'),
-            subtitle: const Text('When someone uploads, edits or deletes'),
-            value: music.pushEnabled,
-            onChanged: music.setPushEnabled,
-          ),
+        _NavRow(
+          icon: Icons.tune,
+          title: 'Listening settings',
+          onTap: () => _push(context, const ListeningSettingsScreen()),
+        ),
         SwitchListTile(
           secondary: const Icon(Icons.dark_mode_outlined),
           title: const Text('Dark mode'),
@@ -5931,7 +6228,6 @@ class ProfileScreen extends StatelessWidget {
           _NavRow(
             icon: Icons.system_update_rounded,
             title: 'Check for updates',
-            subtitle: 'Tap to check · Long press to preview',
             trailing: 'v${music.installedVersion}',
             onTap: () => _manualCheckAppUpdate(context),
             onLongPress: () => _manualCheckAppUpdate(context, force: true),

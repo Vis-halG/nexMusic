@@ -151,12 +151,12 @@ void main() {
       ownerUid: 'someone-else',
     );
     expect(
-      await controller.updateSong(song, title: 'Two', categoryId: 'c1'),
+      await controller.updateSong(song, title: 'Two', categoryIds: ['c1']),
       isFalse,
     );
     expect(await controller.deleteSong(song), isFalse);
 
-    // Deleting a category together with its songs is for its creator only.
+    // Anyone may rename or delete any category, but only while signed in.
     expect(
       await controller.deleteCategory(
         controller.categories.first,
@@ -164,7 +164,57 @@ void main() {
       ),
       isFalse,
     );
-    expect(controller.notice, contains('Only the person who created'));
+    expect(controller.notice, contains('Sign in'));
+    expect(
+      await controller.renameCategory(controller.categories.first, 'Pop'),
+      isFalse,
+    );
+    expect(controller.notice, contains('Sign in'));
+  });
+
+  test('a song can be listed in several categories', () async {
+    SharedPreferences.setMockInitialValues({});
+    final controller = MusicController(await SharedPreferences.getInstance())
+      ..categories = const [
+        MusicCategory(id: 'c1', name: 'Bollywood', ownerUid: 'u1'),
+        MusicCategory(id: 'c2', name: 'Rain', ownerUid: 'u2'),
+      ]
+      ..songs = const [
+        Song(
+          id: 'both',
+          title: 'Both',
+          kind: 'audio',
+          url: 'u',
+          categoryId: 'c1',
+          extraCategoryIds: ['c2', 'c1'],
+        ),
+        Song(
+          id: 'one',
+          title: 'One',
+          kind: 'audio',
+          url: 'u',
+          categoryId: 'c1',
+        ),
+      ];
+    addTearDown(controller.dispose);
+
+    expect(controller.songsIn('c1').map((s) => s.id), ['both', 'one']);
+    expect(controller.songsIn('c2').map((s) => s.id), ['both']);
+    expect(controller.songs.first.categoryIds, ['c1', 'c2']);
+    expect(controller.songSource(controller.songs.first), 'Bollywood, Rain');
+    // Deleting Bollywood would remove only the song listed nowhere else.
+    expect(
+      controller.songsOnlyIn(controller.categories.first).map((s) => s.id),
+      ['one'],
+    );
+    final copy = Song.fromJson(controller.songs.first.toJson())!;
+    expect(copy.categoryId, 'c1');
+    expect(copy.categoryIds, ['c1', 'c2']);
+    // Entries written by older app versions have only the main category.
+    expect(
+      Song.fromJson({'id': 'old', 'url': 'u', 'categoryId': 'c2'})!.categoryIds,
+      ['c2'],
+    );
   });
 
   test('upload batch progress counts finished and in-flight bytes', () async {

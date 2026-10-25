@@ -90,3 +90,33 @@ test('public playlists never expose invite tokens; join proofs are private and r
   await assertSucceeds(deleteDoc(doc(owner,'playlistInvites/secret')));
   await assertFails(join('outsider','secret',true));
 });
+
+test('anyone signed in can rename or delete any category, but not anonymously',async () => {
+  await env.withSecurityRulesDisabled(async context => {
+    await setDoc(doc(context.firestore(),'categories/rock'),{name:'Rock',ownerUid:'owner',createdAt:Timestamp.now()});
+  });
+  await assertSucceeds(updateDoc(doc(db('bob'),'categories/rock'),{name:'Classic rock'}));
+  await assertFails(updateDoc(doc(db('bob'),'categories/rock'),{ownerUid:'bob'}));
+  await assertFails(updateDoc(doc(db('bob'),'categories/rock'),{name:''}));
+  await assertFails(deleteDoc(doc(env.unauthenticatedContext().firestore(),'categories/rock')));
+  await assertSucceeds(deleteDoc(doc(db('bob'),'categories/rock')));
+});
+
+test('a song can list several categories, its main one included',async () => {
+  await env.withSecurityRulesDisabled(async context => {
+    const admin=context.firestore();
+    await setDoc(doc(admin,'categories/pop'),{name:'Pop',ownerUid:'owner',createdAt:Timestamp.now()});
+    await setDoc(doc(admin,'categories/rain'),{name:'Rain',ownerUid:'owner',createdAt:Timestamp.now()});
+  });
+  const song=(extra={}) => ({title:'Song',kind:'audio',categoryId:'pop',url:'https://res.cloudinary.com/demo/a.mp3',publicId:'a',sizeBytes:1000,durationMs:0,ownerUid:'alice',ownerName:'Alice',createdAt:serverTimestamp(),updatedAt:serverTimestamp(),deleted:false,...extra});
+  const alice=db('alice'), bob=db('bob');
+  // Older app versions write only the main category.
+  await assertSucceeds(setDoc(doc(alice,'songs/old'),song()));
+  await assertSucceeds(setDoc(doc(alice,'songs/both'),song({categoryIds:['pop','rain']})));
+  await assertFails(setDoc(doc(alice,'songs/bad'),song({categoryIds:['rain']})));
+  await assertFails(setDoc(doc(alice,'songs/empty'),song({categoryIds:[]})));
+  await assertFails(setDoc(doc(alice,'songs/many'),song({categoryIds:['pop',...Array.from({length:20},(_, i) => `c${i}`)]})));
+  await assertSucceeds(updateDoc(doc(bob,'songs/old'),{categoryId:'rain',categoryIds:['rain','pop'],updatedAt:serverTimestamp()}));
+  await assertFails(updateDoc(doc(bob,'songs/old'),{categoryIds:['pop'],updatedAt:serverTimestamp()}));
+  await assertSucceeds(updateDoc(doc(bob,'songs/both'),{title:'Renamed',updatedAt:serverTimestamp()}));
+});

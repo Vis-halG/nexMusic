@@ -1,8 +1,17 @@
 export const ADMIN_EMAIL = 'vishalgupta25980@gmail.com';
+/** The owner, who alone can let other accounts manage users. */
 export const isAdmin = identity => identity.email_verified === true &&
   typeof identity.email === 'string' && identity.email.toLowerCase() === ADMIN_EMAIL;
 const reply = (data, status = 200) => Response.json(data, { status,
   headers: { 'Cache-Control': 'no-store' } });
+
+/** Whether the owner let [uid] manage users. Only this Worker writes the flag. */
+async function isManager(root, uid, headers, fetcher) {
+  const response = await fetcher(`https://firestore.googleapis.com/v1/${root}/appUsers/${encodeURIComponent(uid)}`, { headers });
+  if (response.status === 404) return false;
+  if (!response.ok) throw new Error('Could not check user management access.');
+  return (await response.json()).fields?.manager?.booleanValue === true;
+}
 
 /** Existing ID tokens are also checked against the server-managed app block. */
 export async function accountAccess(projectId, uid, idToken, fetcher = fetch) {
@@ -18,13 +27,16 @@ export async function accountAccess(projectId, uid, idToken, fetcher = fetch) {
 }
 
 export async function adminUsers(request, { identity, projectId, getToken, fetcher = fetch, now = Date.now() }) {
-  if (!isAdmin(identity)) return reply({ error: 'Administrator access required.' }, 403);
+  const owner = isAdmin(identity);
   const url = new URL(request.url);
   const authRoot = `https://identitytoolkit.googleapis.com/v1/projects/${projectId}`;
   const root = `projects/${projectId}/databases/(default)/documents`;
   try {
     const token = await getToken();
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    if (!owner && !(await isManager(root, identity.sub, headers, fetcher))) {
+      return reply({ error: 'Administrator access required.' }, 403);
+    }
     const api = async (path, body) => {
       const response = await fetcher(`${authRoot}/${path}`, { headers,
         ...(body ? { method: 'POST', body: JSON.stringify(body) } : {}),
@@ -69,19 +81,44 @@ export async function adminUsers(request, { identity, projectId, getToken, fetch
           blocked, signedIn: !blocked && signedIn.length > 0, online: !blocked && online,
           signInDisabled: user.disabled === true,
           protected: (user.email || '').toLowerCase() === ADMIN_EMAIL,
+          manager: status?.manager?.booleanValue === true,
         };
-      }), nextPageToken: page.nextPageToken || '' });
+      }), nextPageToken: page.nextPageToken || '', canGrant: owner });
     }
-    if (request.method !== 'POST' || url.pathname !== '/admin/users/status') return reply({ error: 'Route not found.' }, 404);
+    if (request.method !== 'POST') return reply({ error: 'Route not found.' }, 404);
     let input;
     try { input = await request.json(); } catch { return reply({ error: 'Invalid request.' }, 400); }
-    if (typeof input.uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.uid) || typeof input.blocked !== 'boolean') {
+    if (typeof input.uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.uid)) {
+      return reply({ error: 'A valid user is required.' }, 400);
+    }
+    if (url.pathname === '/admin/users/manager') {
+      if (!owner) return reply({ error: 'Only the owner can change who manages users.' }, 403);
+      if (typeof input.manager !== 'boolean') return reply({ error: 'A valid manager state is required.' }, 400);
+      const user = (await api('accounts:lookup', { localId: [input.uid] })).users?.[0];
+      if (!user) return reply({ error: 'User not found.' }, 404);
+      if ((user.email || '').toLowerCase() === ADMIN_EMAIL) {
+        return reply({ error: 'The owner always manages users.' }, 400);
+      }
+      const response = await fetcher(`https://firestore.googleapis.com/v1/${root}/appUsers/${encodeURIComponent(input.uid)}?updateMask.fieldPaths=manager&updateMask.fieldPaths=updatedAt`, {
+        method: 'PATCH', headers, body: JSON.stringify({ fields: {
+          manager: { booleanValue: input.manager }, updatedAt: { integerValue: String(now) },
+        } }),
+      });
+      if (!response.ok) throw new Error('Could not update user management access.');
+      return reply({ uid: input.uid, manager: input.manager });
+    }
+    if (url.pathname !== '/admin/users/status') return reply({ error: 'Route not found.' }, 404);
+    if (typeof input.blocked !== 'boolean') {
       return reply({ error: 'A valid user and block state are required.' }, 400);
     }
     const user = (await api('accounts:lookup', { localId: [input.uid] })).users?.[0];
     if (!user) return reply({ error: 'User not found.' }, 404);
     if (input.uid === identity.sub || (user.email || '').toLowerCase() === ADMIN_EMAIL) {
       return reply({ error: 'The administrator account cannot be blocked.' }, 400);
+    }
+    // Managers cannot lock each other out; only the owner can block one.
+    if (!owner && await isManager(root, input.uid, headers, fetcher)) {
+      return reply({ error: 'Only the owner can block someone who manages users.' }, 403);
     }
     const saveBlock = async blocked => {
       const response = await fetcher(`https://firestore.googleapis.com/v1/${root}/appUsers/${encodeURIComponent(input.uid)}?updateMask.fieldPaths=blocked&updateMask.fieldPaths=updatedAt`, {

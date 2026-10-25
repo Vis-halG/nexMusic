@@ -179,72 +179,11 @@ class PersonalLibraryPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 12, 4),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Your playlists',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                ),
-              ),
-              IconButton(
-                tooltip: 'Import playlist',
-                onPressed: () => _importPersonalPlaylist(context),
-                icon: const Icon(Icons.file_open_outlined),
-              ),
-              IconButton(
-                tooltip: 'New playlist',
-                onPressed: () async {
-                  final name = await _nameDialog(
-                    context,
-                    title: 'New playlist',
-                    action: 'Create',
-                  );
-                  if (name != null && context.mounted) {
-                    await _featureTask(context, () async {
-                      final p = music.personal.createPlaylist(name);
-                      _push(context, PlaylistScreen(id: p.id));
-                    });
-                  }
-                },
-                icon: const Icon(Icons.add),
-              ),
-            ],
-          ),
-        ),
-        if (music.personal.playlists.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            child: Text(
-              'Mix online songs, uploads and your files in a personal playlist.',
-            ),
-          ),
-        for (final p in music.personal.playlists)
-          ListTile(
-            leading: _playlistCover(p.cover),
-            title: Text(p.name),
-            subtitle: Text(
-              '${p.tracks.length} tracks${p.members.length > 1 ? ' · Collaborative' : ''}',
-            ),
-            onTap: () => _push(context, PlaylistScreen(id: p.id)),
-          ),
-        _NavRow(
-          icon: Icons.person_outline_rounded,
-          title: 'Artists',
-          onTap: () => _push(context, const MusicArtistsScreen()),
-        ),
         _NavRow(
           icon: Icons.folder_open,
           title: 'Music on this device',
           trailing: '${music.personal.localTracks.length}',
           onTap: () => _push(context, const DeviceMusicScreen()),
-        ),
-        _NavRow(
-          icon: Icons.podcasts,
-          title: 'Podcasts & audiobooks',
-          onTap: () => _push(context, const LongformScreen()),
         ),
         _NavRow(
           icon: Icons.download_outlined,
@@ -349,26 +288,6 @@ Widget _playlistCover(String cover, {double size = 48}) => Container(
   alignment: Alignment.center,
   child: Text(cover, style: TextStyle(fontSize: size / 2)),
 );
-Future<void> _importPersonalPlaylist(BuildContext context) =>
-    _featureTask(context, () async {
-      final chosen = await FilePicker.pickFile(
-        type: FileType.custom,
-        allowedExtensions: ['json', 'csv'],
-      );
-      if (chosen == null || !context.mounted) return;
-      final file = chosen;
-      if ((await file.length()) > 1024 * 1024) {
-        throw const FormatException('Choose a playlist file under 1 MB.');
-      }
-      final input = utf8.decode(await file.readAsBytes());
-      if (!context.mounted) return;
-      if (file.extension?.toLowerCase() == 'csv') {
-        _push(context, PlaylistCsvReviewScreen(rows: importPlaylistCsv(input)));
-        return;
-      }
-      final p = context.read<MusicController>().personal.import(input);
-      _push(context, PlaylistScreen(id: p.id));
-    });
 
 class PlaylistScreen extends StatelessWidget {
   const PlaylistScreen({super.key, required this.id});

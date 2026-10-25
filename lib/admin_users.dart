@@ -12,6 +12,7 @@ class AppUser {
     this.signedIn = false,
     this.protected = false,
     this.signInDisabled = false,
+    this.manager = false,
     this.lastLogin = 0,
     this.lastSeen = 0,
     this.createdAt = 0,
@@ -25,11 +26,15 @@ class AppUser {
     signedIn: data['signedIn'] == true,
     protected: data['protected'] == true,
     signInDisabled: data['signInDisabled'] == true,
+    manager: data['manager'] == true,
     lastLogin: (data['lastLogin'] as num? ?? 0).toInt(),
     lastSeen: (data['lastSeen'] as num? ?? 0).toInt(),
     createdAt: (data['createdAt'] as num? ?? 0).toInt(),
   );
   final String uid, email, name;
   final bool blocked, online, signedIn, protected, signInDisabled;
+
+  /// The owner let this account manage users.
+  final bool manager;
   final int lastLogin, lastSeen, createdAt;
 }

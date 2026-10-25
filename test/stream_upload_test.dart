@@ -57,6 +57,7 @@ class UploadMusic extends MusicController {
   Future<void> startUploads(
     List<UploadItem> items, {
     required String categoryId,
+    List<String> extraCategoryIds = const [],
   }) async {
     submitted = items;
     submittedCategory = categoryId;

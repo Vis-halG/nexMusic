@@ -431,6 +431,7 @@ extension MusicListeningActions on MusicController {
     final generation = ++_accountGeneration;
     await _accessSubscription?.cancel();
     _accessSubscription = null;
+    _userManager = false;
     _presenceTimer?.cancel();
     await playback.stop();
     downloads

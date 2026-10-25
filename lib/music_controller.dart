@@ -88,6 +88,9 @@ String playbackUrlFor(String cloudinaryUrl) {
 /// Largest audio or video file the Cloudinary free plan accepts.
 const maxUploadBytes = 100 * 1024 * 1024;
 
+/// Most categories one song can be listed in; the Firestore rules agree.
+const maxSongCategories = 20;
+
 /// Cloudinary account that stores public uploads. Neither value is a secret:
 /// unsigned uploads only need the cloud name and an unsigned upload preset.
 const cloudinaryCloudName = String.fromEnvironment(
@@ -641,10 +644,19 @@ class MusicController extends ChangeNotifier {
   }
 
   String get profileEmail => _auth?.currentUser?.email?.trim() ?? '';
-  bool get isAdmin => isNexMusicAdmin(
+
+  /// The owner account, which alone can let others manage users.
+  bool get isOwnerAdmin => isNexMusicAdmin(
     profileEmail,
     verified: _auth?.currentUser?.emailVerified == true,
   );
+
+  /// Set by the server in this account's `appUsers` document.
+  bool _userManager = false;
+
+  /// Whether Profile shows Manage users: the owner, or someone the owner
+  /// allowed. The Worker checks the same before every request.
+  bool get isAdmin => isOwnerAdmin || _userManager;
 
   Future<Map<String, dynamic>> adminRequest(
     String route, {
@@ -705,9 +717,13 @@ class MusicController extends ChangeNotifier {
         .doc(account)
         .snapshots()
         .listen((snapshot) {
-          if (_accountUid != account ||
-              snapshot.data()?['blocked'] != true ||
-              _blockingSignOut) {
+          if (_accountUid != account) return;
+          final manager = snapshot.data()?['manager'] == true;
+          if (manager != _userManager) {
+            _userManager = manager;
+            notifyListeners();
+          }
+          if (snapshot.data()?['blocked'] != true || _blockingSignOut) {
             return;
           }
           _blockingSignOut = true;
@@ -830,7 +846,11 @@ class MusicController extends ChangeNotifier {
     if (song.isLongform) {
       return song.contentType == 'podcast' ? 'Podcast' : 'Audiobook';
     }
-    if (!song.isProvider) return categoryName(song.categoryId);
+    if (!song.isProvider) {
+      return song.categoryIds.isEmpty
+          ? categoryName(song.categoryId)
+          : song.categoryIds.map(categoryName).join(', ');
+    }
     return [
       song.artist,
       providerNameFor(song.providerId),
@@ -954,7 +974,7 @@ class MusicController extends ChangeNotifier {
 
   List<Song> songsIn(String? categoryId) => categoryId == null
       ? songs
-      : songs.where((song) => song.categoryId == categoryId).toList();
+      : songs.where((song) => song.inCategory(categoryId)).toList();
 
   bool ownsSong(Song song) => uid != null && song.ownerUid == uid;
   bool ownsCategory(MusicCategory category) =>
@@ -1787,11 +1807,12 @@ class MusicController extends ChangeNotifier {
     }
   }
 
+  /// Renames a category. Anyone signed in can rename any category.
   Future<bool> renameCategory(MusicCategory category, String name) async {
     final cleanName = name.trim();
     final firestore = _firestore;
-    if (firestore == null || !ownsCategory(category)) {
-      notice = 'Only the person who created this category can rename it.';
+    if (firestore == null || uid == null) {
+      notice = 'Sign in with Google to rename categories.';
       notifyListeners();
       return false;
     }
@@ -1835,24 +1856,35 @@ class MusicController extends ChangeNotifier {
     }
   }
 
-  /// Deletes a category. One that still has songs is only deleted with
-  /// [withSongs], which removes its songs for everyone first: the Firestore
-  /// rules accept song changes only while their category exists. Only the
-  /// category's creator can delete it.
+  /// Songs listed only in [category], which go when it is deleted.
+  List<Song> songsOnlyIn(MusicCategory category) => songs
+      .where((song) => song.categoryIds.every((id) => id == category.id))
+      .where((song) => song.inCategory(category.id))
+      .toList();
+
+  /// Deletes a category; anyone signed in can delete any category. Songs also
+  /// listed elsewhere just leave it. Songs listed only here are removed for
+  /// everyone, which needs [withSongs]: the Firestore rules accept song
+  /// changes only while their main category exists.
   Future<bool> deleteCategory(
     MusicCategory category, {
     bool withSongs = false,
   }) async {
     final firestore = _firestore;
-    if (firestore == null || !ownsCategory(category)) {
-      notice = 'Only the person who created this category can delete it.';
+    if (firestore == null || uid == null) {
+      notice = 'Sign in with Google to delete categories.';
       notifyListeners();
       return false;
     }
-    final inCategory = songs
-        .where((song) => song.categoryId == category.id)
+    final onlyHere = songsOnlyIn(category);
+    final elsewhere = songs
+        .where(
+          (song) =>
+              song.inCategory(category.id) &&
+              !onlyHere.any((only) => only.id == song.id),
+        )
         .toList();
-    if (inCategory.isNotEmpty && !withSongs) {
+    if (onlyHere.isNotEmpty && !withSongs) {
       notice =
           'This category still has songs. Move them to another category first.';
       notifyListeners();
@@ -1860,21 +1892,51 @@ class MusicController extends ChangeNotifier {
     }
     final removed = <String>{};
     try {
-      // Each song write makes the rules look up the category, and a batched
+      // Each song write makes the rules look up a category, and a batched
       // write allows 20 such lookups, so songs go 20 per batch, 5 at a time.
-      final batches = [
-        for (var start = 0; start < inCategory.length; start += 20)
-          inCategory.sublist(start, math.min(start + 20, inCategory.length)),
-      ];
-      for (var i = 0; i < batches.length; i += 5) {
-        await Future.wait([
-          for (final batch in batches.skip(i).take(5))
-            _softDeleteSongs(
-              firestore,
-              batch,
-            ).then((_) => removed.addAll(batch.map((song) => song.id))),
-        ]);
+      Future<void> inBatches(
+        List<Song> list,
+        Future<void> Function(List<Song> batch) write,
+      ) async {
+        final batches = [
+          for (var start = 0; start < list.length; start += 20)
+            list.sublist(start, math.min(start + 20, list.length)),
+        ];
+        for (var i = 0; i < batches.length; i += 5) {
+          await Future.wait([
+            for (final b in batches.skip(i).take(5)) write(b),
+          ]);
+        }
       }
+
+      Song leave(Song song) {
+        final ids = song.categoryIds.where((id) => id != category.id).toList();
+        return song.copyWith(
+          categoryId: ids.first,
+          extraCategoryIds: ids.skip(1).toList(),
+        );
+      }
+
+      await inBatches(elsewhere, (batch) async {
+        final writes = firestore.batch();
+        for (final song in batch) {
+          final left = leave(song);
+          writes.update(firestore.collection('songs').doc(song.id), {
+            'categoryId': left.categoryId,
+            'categoryIds': left.categoryIds,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+        await writes.commit();
+        _editSongs({for (final song in batch) song.id}, leave);
+      });
+      await inBatches(
+        onlyHere,
+        (batch) => _softDeleteSongs(
+          firestore,
+          batch,
+        ).then((_) => removed.addAll(batch.map((song) => song.id))),
+      );
       await firestore.collection('categories').doc(category.id).delete();
       categories = categories.where((item) => item.id != category.id).toList();
       await _forgetSongs(removed);
@@ -1952,11 +2014,12 @@ class MusicController extends ChangeNotifier {
 
   // ── Public uploads ───────────────────────────────────────────────────────
 
-  /// Uploads [items] into [categoryId], a few files at a time. Progress is
-  /// reported through [uploads].
+  /// Uploads [items] into [categoryId] and any [extraCategoryIds], a few files
+  /// at a time. Progress is reported through [uploads].
   Future<void> startUploads(
     List<UploadItem> items, {
     required String categoryId,
+    List<String> extraCategoryIds = const [],
   }) async {
     if (items.isEmpty) return;
     if (categoryById(categoryId) == null) {
@@ -1987,9 +2050,14 @@ class MusicController extends ChangeNotifier {
     for (final item in uploads) {
       discardPicked(item, keep: keep);
     }
+    final extra = [
+      for (final id in extraCategoryIds.toSet())
+        if (id != categoryId && categoryById(id) != null) id,
+    ].take(maxSongCategories - 1).toList();
     for (final item in items) {
       item
         ..categoryId = categoryId
+        ..extraCategoryIds = extra
         ..status = UploadStatus.queued
         ..progress = 0
         ..error = null;
@@ -2213,6 +2281,9 @@ class MusicController extends ChangeNotifier {
               'title': title,
               'kind': kind,
               'categoryId': item.categoryId,
+              // Only uploads in several categories need the list.
+              if (item.extraCategoryIds.isNotEmpty)
+                'categoryIds': [item.categoryId, ...item.extraCategoryIds],
               'url': url,
               'publicId': item.uploadedPublicId,
               'sizeBytes': item.sizeBytes,
@@ -2242,6 +2313,7 @@ class MusicController extends ChangeNotifier {
                 kind: kind,
                 url: url,
                 categoryId: item.categoryId,
+                extraCategoryIds: item.extraCategoryIds,
                 ownerUid: user.uid,
                 ownerName: ownerName,
                 publicId: item.uploadedPublicId,
@@ -2440,15 +2512,25 @@ class MusicController extends ChangeNotifier {
     }
   }
 
-  /// Renames an upload or moves it to another category. Anyone signed in can
-  /// edit any upload.
+  /// Applies [edit] to the listed songs with [ids] and to the one playing.
+  void _editSongs(Set<String> ids, Song Function(Song song) edit) {
+    songs = [
+      for (final item in songs) ids.contains(item.id) ? edit(item) : item,
+    ];
+    if (current != null && ids.contains(current!.id)) current = edit(current!);
+    _scheduleCatalogSave();
+  }
+
+  /// Renames an upload or changes its categories, the first of which is its
+  /// main one. Anyone signed in can edit any upload.
   Future<bool> updateSong(
     Song song, {
     required String title,
-    required String categoryId,
+    required List<String> categoryIds,
     String? artist,
   }) async {
     final cleanTitle = title.trim();
+    final ids = categoryIds.toSet().toList();
     final firestore = _firestore;
     if (firestore == null || uid == null) {
       notice = 'Sign in with Google to edit songs.';
@@ -2459,34 +2541,42 @@ class MusicController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
-    if (categoryById(categoryId) == null) {
+    if (ids.isEmpty || ids.any((id) => categoryById(id) == null)) {
       notice = 'Choose a category.';
       notifyListeners();
       return false;
     }
+    if (ids.length > maxSongCategories) {
+      notice = 'A song can be in up to $maxSongCategories categories.';
+      notifyListeners();
+      return false;
+    }
+    final categoryId = ids.first;
+    final extra = ids.skip(1).toList();
     try {
       await firestore.collection('songs').doc(song.id).update({
         'title': cleanTitle,
         'categoryId': categoryId,
+        // Songs in one category keep the shape older app versions write.
+        if (extra.isNotEmpty || song.extraCategoryIds.isNotEmpty)
+          'categoryIds': ids,
         'updatedAt': FieldValue.serverTimestamp(),
       });
-      songs = [
-        for (final item in songs)
-          item.id == song.id
-              ? item.copyWith(title: cleanTitle, categoryId: categoryId)
-              : item,
-      ];
-      if (current?.id == song.id) {
-        current = current!.copyWith(title: cleanTitle, categoryId: categoryId);
-      }
-      _scheduleCatalogSave();
+      _editSongs(
+        {song.id},
+        (item) => item.copyWith(
+          title: cleanTitle,
+          categoryId: categoryId,
+          extraCategoryIds: extra,
+        ),
+      );
       if (artist != null) setSongArtist(song, artist);
       final activity = songEditActivity(
         oldTitle: song.title,
         newTitle: cleanTitle,
-        movedTo: categoryId == song.categoryId
+        movedTo: setEquals(ids.toSet(), song.categoryIds.toSet())
             ? null
-            : categoryName(categoryId),
+            : ids.map(categoryName).join(', '),
       );
       if (activity != null) unawaited(phone?.report(activity));
       notice = 'Song updated.';
@@ -3103,6 +3193,10 @@ class MusicController extends ChangeNotifier {
       kind: row['kind'] == 'video' ? 'video' : 'audio',
       url: row['url'] as String? ?? '',
       categoryId: row['categoryId'] as String? ?? '',
+      extraCategoryIds: Song.extraCategories(
+        row['categoryIds'],
+        row['categoryId'] as String? ?? '',
+      ),
       ownerUid: row['ownerUid'] as String? ?? '',
       ownerName: row['ownerName'] as String? ?? '',
       artist: row['artist'] as String? ?? '',

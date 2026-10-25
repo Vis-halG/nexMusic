@@ -448,18 +448,6 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
       children: [
         if (busy) const LinearProgressIndicator(),
         if (error != null) TextButton(onPressed: load, child: Text(error!)),
-        if (tracks.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: FilledButton.icon(
-              onPressed: () => context.read<MusicController>().play(
-                tracks.first,
-                from: tracks,
-              ),
-              icon: const Icon(Icons.play_arrow),
-              label: const Text('Play all'),
-            ),
-          ),
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.only(bottom: 80),

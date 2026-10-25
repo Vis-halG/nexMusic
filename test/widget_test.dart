@@ -332,10 +332,11 @@ void main() {
 
     expect(find.text('Categories'), findsOneWidget);
     expect(find.text('Bollywood'), findsOneWidget);
-    // Nobody is signed in here, so every category belongs to someone else.
-    expect(find.text('2 songs · created by someone else'), findsOneWidget);
-    expect(find.text('1 song · created by someone else'), findsOneWidget);
-    expect(find.byTooltip('Rename'), findsNothing);
+    // Every category can be renamed or deleted, whoever created it.
+    expect(find.text('2 songs'), findsOneWidget);
+    expect(find.text('1 song'), findsOneWidget);
+    expect(find.byTooltip('Rename'), findsNWidgets(_categories.length));
+    expect(find.byTooltip('Delete'), findsNWidgets(_categories.length));
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());

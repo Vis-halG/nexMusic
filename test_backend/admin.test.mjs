@@ -12,9 +12,62 @@ test('the admin role requires the exact verified email and cannot be forged in a
     { ...identity, email: 'vishalgupta25989@gmail.com' },
     { ...identity, email: `${ADMIN_EMAIL}.fake` } ]) {
     assert.equal(isAdmin(claimant), false);
-    const response = await adminUsers(request({ ...identity }), { ...context(() => { throw Error('Should never contact Google'); }), identity: claimant });
+    // Only the claimant's own server-managed access record is read.
+    const fetcher = async url => {
+      if (!url.includes('/appUsers/owner')) throw Error('Should never contact Google');
+      return new Response('', { status: 404 });
+    };
+    const response = await adminUsers(request({ ...identity }), { ...context(fetcher), identity: claimant });
     assert.equal(response.status, 403);
   }
+});
+
+const manager = { sub: 'mira', email: 'mira@example.com', email_verified: true };
+const managers = new Set(['mira', 'max']);
+const lookup = (uid, email = `${uid}@example.com`) => Response.json({ users: [{ localId: uid, email }] });
+// Answers access records from `managers`, user lookups and writes.
+const directory = calls => async (url, options = {}) => {
+  const body = options.body && JSON.parse(options.body);
+  const record = url.match(/\/appUsers\/([^?]+)$/);
+  if (record && !options.method) {
+    return managers.has(record[1]) ? Response.json({ fields: { manager: { booleanValue: true } } }) : new Response('', { status: 404 });
+  }
+  if (url.endsWith('accounts:lookup')) return lookup(body.localId[0], body.localId[0] === 'owner' ? ADMIN_EMAIL : undefined);
+  calls.push({ url, body }); return Response.json({});
+};
+
+test('someone the owner allowed can manage users but not grant access or block another manager', async () => {
+  const calls = [];
+  const as = { ...context(directory(calls)), identity: manager };
+  const list = await adminUsers(request(), { ...as, fetcher: async (url, options) => {
+    if (url.includes('accounts:batchGet')) return Response.json({ users: [{ localId: 'max', email: 'max@example.com' }] });
+    if (url.endsWith(':batchGet')) return Response.json([{ found: { name: 'projects/test/databases/(default)/documents/appUsers/max', fields: { manager: { booleanValue: true } } } }]);
+    return directory(calls)(url, options);
+  } });
+  assert.equal(list.status, 200);
+  const data = await list.json();
+  assert.equal(data.canGrant, false);
+  assert.equal(data.users[0].manager, true);
+  assert.equal((await adminUsers(request({ uid: 'alice', blocked: true }, 'https://worker/admin/users/status'), as)).status, 200);
+  calls.length = 0;
+  assert.equal((await adminUsers(request({ uid: 'max', blocked: true }, 'https://worker/admin/users/status'), as)).status, 403);
+  assert.equal((await adminUsers(request({ uid: 'alice', manager: true }, 'https://worker/admin/users/manager'), as)).status, 403);
+  assert.equal(calls.length, 0);
+});
+
+test('the owner grants and revokes user management, but not for the owner account', async () => {
+  const calls = [];
+  const as = context(directory(calls));
+  let response = await adminUsers(request({ uid: 'alice', manager: true }, 'https://worker/admin/users/manager'), as);
+  assert.equal(response.status, 200);
+  assert.ok(calls[0].url.includes('/appUsers/alice?updateMask.fieldPaths=manager'));
+  assert.equal(calls[0].body.fields.manager.booleanValue, true);
+  response = await adminUsers(request({ uid: 'alice', manager: false }, 'https://worker/admin/users/manager'), as);
+  assert.equal(calls[1].body.fields.manager.booleanValue, false);
+  assert.equal((await adminUsers(request({ uid: 'owner', manager: false }, 'https://worker/admin/users/manager'), as)).status, 400);
+  assert.equal((await adminUsers(request({ uid: 'alice', manager: 'yes' }, 'https://worker/admin/users/manager'), as)).status, 400);
+  // The owner may still block a manager.
+  assert.equal((await adminUsers(request({ uid: 'max', blocked: true }, 'https://worker/admin/users/status'), as)).status, 200);
 });
 test('listing returns minimal account and per-device login status without password hashes or tokens', async () => {
   const fetcher = async url => {
