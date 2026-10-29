@@ -122,7 +122,10 @@ class _SongSelectionHostState extends State<_SongSelectionHost> {
                 ? Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _SongSelectionBar(playlistId: config.playlistId),
+                      _SongSelectionBar(
+                        playlistId: config.playlistId,
+                        padBottom: config.bottomNavigationBar == null,
+                      ),
                       if (config.bottomNavigationBar != null)
                         config.bottomNavigationBar!,
                     ],
@@ -136,8 +139,9 @@ class _SongSelectionHostState extends State<_SongSelectionHost> {
 }
 
 class _SongSelectionBar extends StatefulWidget {
-  const _SongSelectionBar({this.playlistId});
+  const _SongSelectionBar({this.playlistId, this.padBottom = true});
   final String? playlistId;
+  final bool padBottom;
 
   @override
   State<_SongSelectionBar> createState() => _SongSelectionBarState();
@@ -264,9 +268,11 @@ class _SongSelectionBarState extends State<_SongSelectionBar> {
         : account.playlist(widget.playlistId!);
     final actions = <(String, String, IconData)>[
       if (tracks.any((s) => !s.isVideo)) ...[
+        ('play', 'Play selected', Icons.play_arrow_rounded),
         ('shuffle', 'Shuffle selected', Icons.shuffle),
         ('next', 'Play next', Icons.playlist_play),
       ],
+      ('playlist', 'Add to playlist', Icons.playlist_add_rounded),
       if (tracks.any((s) => !music.isLiked(s)))
         ('like', 'Like selected', Icons.favorite_border),
       if (tracks.any(music.isLiked))
@@ -286,6 +292,10 @@ class _SongSelectionBarState extends State<_SongSelectionBar> {
     final choice = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.8,
+      ),
       builder: (sheet) => SafeArea(
         child: SingleChildScrollView(
           child: Column(
@@ -303,8 +313,14 @@ class _SongSelectionBarState extends State<_SongSelectionBar> {
       ),
     );
     if (!mounted || choice == null || account != music.personal) return;
+    if (choice == 'playlist') {
+      await _choosePlaylistsForSelection(context, selection.selected);
+      return;
+    }
     await run((music, tracks) async {
       switch (choice) {
+        case 'play':
+          await music.playSelectedSongs(tracks);
         case 'shuffle':
           await music.playSelectedSongs(tracks, shuffle: true);
         case 'next':
@@ -355,20 +371,43 @@ class _SongSelectionBarState extends State<_SongSelectionBar> {
     final selection = context.watch<SongSelection>();
     final selected = selection.selected;
     final enabled = selected.isNotEmpty && !selection.busy;
+    final music = context.watch<MusicController>();
+    final allLiked = selected.isNotEmpty && selected.every(music.isLiked);
+    final downloadable = selected
+        .where(
+          (song) =>
+              !song.isLocal &&
+              !song.isPrivate &&
+              !song.url.startsWith('device:') &&
+              !music.isSongDownloaded(song),
+        )
+        .toList();
+    final allSaved = selected.isNotEmpty && downloadable.isEmpty;
     Widget action(String label, IconData icon, VoidCallback? onPressed) =>
         Expanded(
           child: TextButton(
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, 56),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              foregroundColor: Theme.of(context).colorScheme.onSurface,
+              textStyle: const TextStyle(fontSize: 12),
+            ),
             onPressed: onPressed,
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: [Icon(icon), const SizedBox(height: 4), Text(label)],
+              children: [
+                Icon(icon, size: 20),
+                const SizedBox(height: 3),
+                Text(label, textAlign: TextAlign.center),
+              ],
             ),
           ),
         );
     return Material(
-      color: Theme.of(context).colorScheme.surfaceContainer,
+      color: Colors.transparent,
       child: SafeArea(
         top: false,
+        bottom: widget.padBottom,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -394,35 +433,90 @@ class _SongSelectionBarState extends State<_SongSelectionBar> {
                   ],
                 ),
               ),
-            Row(
-              children: [
-                action(
-                  'Play',
-                  Icons.play_arrow,
-                  enabled && selected.any((s) => !s.isVideo)
-                      ? () => run(
-                          (music, tracks) => music.playSelectedSongs(tracks),
-                        )
-                      : null,
-                ),
-                action(
-                  'Queue',
-                  Icons.queue_music,
-                  enabled && selected.any((s) => !s.isVideo)
-                      ? () => run(
-                          (music, tracks) => music.addSongsToQueue(tracks),
-                        )
-                      : null,
-                ),
-                action(
-                  'Playlist',
-                  Icons.playlist_add,
-                  enabled
-                      ? () => _choosePlaylistsForSelection(context, selected)
-                      : null,
-                ),
-                action('More', Icons.more_horiz, enabled ? more : null),
-              ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Material(
+                      key: const ValueKey('selection-actions-pill'),
+                      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                      shape: const StadiumBorder(),
+                      clipBehavior: Clip.antiAlias,
+                      elevation: 3,
+                      shadowColor: Colors.black.withValues(alpha: 0.12),
+                      child: Row(
+                        children: [
+                          action(
+                            'Queue',
+                            Icons.queue_music,
+                            enabled && selected.any((s) => !s.isVideo)
+                                ? () => run(
+                                    (music, tracks) =>
+                                        music.addSongsToQueue(tracks),
+                                  )
+                                : null,
+                          ),
+                          action(
+                            allLiked ? 'Unlike' : 'Like',
+                            allLiked
+                                ? Icons.favorite_rounded
+                                : Icons.favorite_border_rounded,
+                            enabled
+                                ? () => run((music, tracks) async {
+                                    music.setSongsLiked(tracks, !allLiked);
+                                    music.announce(
+                                      '${tracks.length} songs ${allLiked ? 'unliked' : 'liked'}',
+                                    );
+                                  })
+                                : null,
+                          ),
+                          action(
+                            allSaved ? 'Saved' : 'Download',
+                            allSaved
+                                ? Icons.download_done_rounded
+                                : Icons.download_rounded,
+                            enabled && !kIsWeb && downloadable.isNotEmpty
+                                ? () => run((music, _) async {
+                                    await music.downloads.enqueue(downloadable);
+                                    music.announce(
+                                      music.downloads.waitingMessage ??
+                                          'Downloads queued. View progress in Downloads.',
+                                    );
+                                  })
+                                : null,
+                          ),
+                          action(
+                            'More',
+                            Icons.more_horiz,
+                            enabled ? more : null,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox.square(
+                    dimension: 56,
+                    child: IconButton.filled(
+                      tooltip: 'Shuffle selected',
+                      style: IconButton.styleFrom(
+                        backgroundColor: NexMusic.violet,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: enabled && selected.any((s) => !s.isVideo)
+                          ? () => run(
+                              (music, tracks) => music.playSelectedSongs(
+                                tracks,
+                                shuffle: true,
+                              ),
+                            )
+                          : null,
+                      icon: const Icon(Icons.shuffle_rounded, size: 25),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),

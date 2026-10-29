@@ -4,7 +4,7 @@ Flutter app for shared music, online songs and videos.
 Signed-in listeners can upload songs and videos into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.12+8035` has four tabs: Home, Stream, Library and Profile. Home
+Version `0.4.13+8036` has four tabs: Home, Stream, Library and Profile. Home
 groups public songs and videos into global recently played/watched, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and an Artists chip that lists the people in the For
@@ -24,6 +24,25 @@ account can let other accounts manage users. Random Play uses every
 source on Home, online songs on Stream, and saved/library songs on Library.
 Inside a category, playlist, artist, Downloads or device music list, the same
 button shuffles only that list's songs.
+
+Swipe the mini player up for the next song or down for the previous song.
+Hold it, then slide up/down to adjust playback volume; releasing restores the
+song details with a subtle transition. Volume stays at the chosen level across
+track changes, crossfades and sleep-timer cancellation. Reduced-motion settings
+are respected. Multi-select actions use a Queue / Like / Download / More pill with a
+separate circular button that shuffles only the selected songs.
+
+On the main Stream and Library screens, Random Play chooses a different
+category or playlist when one is available; online tracks fall back to album
+or artist grouping. Explicit categories, playlists, filters and searches shuffle
+their own tracks and do not append outside radio tracks at the end. Listening
+settings → Notification player lets each account choose two extra shortcuts
+(Like, Shuffle, Repeat, Close or None) on Android 13+, alongside Previous,
+Play/Pause and Next. Earlier Android versions retain the standard transport controls.
+Android controls the notification and lock-screen layout. The owner's Clean up
+song names tool removes leading numeric prefixes of any length, updates queued
+titles, and leaves numbers elsewhere in the title intact.
+The app logo is an SVG, with matching Android vector launcher and splash artwork.
 
 Stream now opens with **For you**, using persisted likes, listening time,
 completed plays, recent history and early skips. Several distinct seed artists

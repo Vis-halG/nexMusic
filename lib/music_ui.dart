@@ -8,7 +8,10 @@ import 'package:flutter/cupertino.dart'
     show CupertinoSliverRefreshControl, RefreshIndicatorMode;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:record/record.dart';
 import 'package:just_audio/just_audio.dart';
@@ -53,6 +56,8 @@ part 'portability_ui.dart';
 part 'previews_ui.dart';
 part 'song_selection_ui.dart';
 part 'advance_ui.dart';
+part 'mini_player.dart';
+part 'notification_player_ui.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -1186,10 +1191,11 @@ class WelcomeScreen extends StatelessWidget {
                   ),
                   padding: const EdgeInsets.all(3),
                   child: ClipOval(
-                    child: Image.asset(
-                      'assets/branding/nexmusic-logo.png',
+                    child: SvgPicture.asset(
+                      'assets/branding/nexmusic-logo.svg',
                       width: 56,
                       height: 56,
+                      semanticsLabel: 'nexMusic logo',
                     ),
                   ),
                 ),
@@ -1646,6 +1652,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
     // A chosen category or chip narrows the shuffle to its songs.
     final listed = switch (_currentTabIndex) {
       0 => _homeKey.currentState?.shuffleSongs,
+      1 => _streamKey.currentState?.shuffleSongs,
       2 => _libraryKey.currentState?.shuffleSongs,
       _ => null,
     };
@@ -2457,6 +2464,18 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
   List<Song> _songs = [], _quickPicks = [], _similar = [];
   String _similarTitle = '';
   List<String> _unavailable = [];
+
+  /// Explicit Stream filters/search shuffle their visible results only.
+  List<Song>? get shuffleSongs {
+    if (_category == 'For you' && _search.text.trim().isEmpty) return null;
+    final tracks = _category == 'Quick Picks' && _search.text.trim().isEmpty
+        ? _quickPicks
+        : _songs;
+    return tracks
+        .where(context.read<MusicController>().personal.accepts)
+        .toList();
+  }
+
   static const _categories = [
     'For you',
     'Trending',
@@ -5468,173 +5487,6 @@ class _SongEditorScreenState extends State<SongEditorScreen> {
 // ─────────────────────────────────────────────────────────────────────────────
 // Players
 // ─────────────────────────────────────────────────────────────────────────────
-
-class MiniPlayer extends StatelessWidget {
-  const MiniPlayer({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final state = context
-        .select<
-          MusicController,
-          ({
-            Song? song,
-            bool playing,
-            bool loading,
-            Duration duration,
-            String category,
-          })
-        >(
-          (music) => (
-            song: music.current,
-            playing: music.playing,
-            loading: music.loading,
-            duration: music.duration,
-            category: music.current == null || music.current!.isPrivate
-                ? 'Private library'
-                : music.categoryName(music.current!.categoryId),
-          ),
-        );
-    final song = state.song;
-    if (song == null) return const SizedBox.shrink();
-    final music = context.read<MusicController>();
-    final scheme = Theme.of(context).colorScheme;
-    final isLiked = music.isLiked(song);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
-      // A pill, with a round cover at its left end.
-      child: Material(
-        color: scheme.surfaceContainerHigh,
-        shape: const StadiumBorder(),
-        elevation: 6,
-        shadowColor: Colors.black.withValues(alpha: 0.35),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => _openPlayer(context),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 6, 6),
-                child: Row(
-                  children: [
-                    ClipOval(
-                      child: _Thumb(
-                        icon: song.isVideo
-                            ? Icons.play_arrow_rounded
-                            : Icons.music_note_rounded,
-                        imageUrl: song.artworkUrl,
-                        size: 44,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            song.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            song.artist.isNotEmpty
-                                ? song.artist
-                                : state.category,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: scheme.onSurfaceVariant,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (!song.isProvider)
-                      IconButton(
-                        tooltip: isLiked ? 'Unlike' : 'Like',
-                        iconSize: 20,
-                        onPressed: () => music.toggleLike(song),
-                        icon: Icon(
-                          isLiked
-                              ? Icons.favorite_rounded
-                              : Icons.favorite_border_rounded,
-                          color: isLiked
-                              ? NexMusic.violet
-                              : scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    if (song.providerId.startsWith('yt'))
-                      IconButton(
-                        tooltip: 'Watch Video',
-                        iconSize: 22,
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => _openSongVideo(context, song),
-                        icon: const Icon(
-                          Icons.smart_display_rounded,
-                          color: NexMusic.violet,
-                        ),
-                      ),
-                    IconButton(
-                      tooltip: state.playing ? 'Pause' : 'Play',
-                      iconSize: 30,
-                      onPressed: music.togglePlay,
-                      icon: state.loading
-                          ? const SizedBox.square(
-                              dimension: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : Icon(
-                              state.playing
-                                  ? Icons.pause_circle_filled_rounded
-                                  : Icons.play_circle_filled_rounded,
-                              color: NexMusic.violet,
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-              ValueListenableBuilder<Duration>(
-                valueListenable: music.positionListenable,
-                builder: (_, position, _) {
-                  final total = state.duration.inMilliseconds;
-                  final value = total <= 0
-                      ? 0.0
-                      : (position.inMilliseconds / total).clamp(0.0, 1.0);
-                  // Kept on the straight part of the pill's bottom edge.
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(28, 0, 28, 4),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(2),
-                      child: LinearProgressIndicator(
-                        value: value,
-                        minHeight: 2.5,
-                        backgroundColor: scheme.outlineVariant.withValues(
-                          alpha: 0.3,
-                        ),
-                        valueColor: const AlwaysStoppedAnimation(
-                          NexMusic.violet,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class NowPlayingScreen extends StatelessWidget {
   const NowPlayingScreen({super.key});

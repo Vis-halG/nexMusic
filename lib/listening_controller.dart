@@ -179,7 +179,9 @@ extension MusicListeningActions on MusicController {
         }
       },
       onQueueEnd: () async {
-        if (_randomScope == MusicRandomScope.library) return;
+        if (_randomScope == MusicRandomScope.library || _queueRestricted) {
+          return;
+        }
         final seed = current, account = personal;
         if (seed == null ||
             !seed.isProvider ||
@@ -191,7 +193,12 @@ extension MusicListeningActions on MusicController {
           limit: 20,
           excludeIds: playback.queue.tracks.map((s) => s.id).toSet(),
         );
-        if (account != personal || seed.id != current?.id) return;
+        if (account != personal ||
+            seed.id != current?.id ||
+            _queueRestricted ||
+            _randomScope == MusicRandomScope.library) {
+          return;
+        }
         for (final track in tracks.where(
           (s) =>
               account.accepts(s) &&
@@ -208,6 +215,12 @@ extension MusicListeningActions on MusicController {
     _restoreQueue();
     _audioHandler
       ?..onPlay = playback.resume
+      ..onLike = () async {
+        final song = current;
+        if (song != null) toggleLike(song);
+      }
+      ..onShuffle = toggleShuffle
+      ..onRepeat = toggleRepeat
       ..onPause = pauseAudio
       ..onSeek = seek
       ..onStop = () async {
@@ -219,6 +232,8 @@ extension MusicListeningActions on MusicController {
         if (song != null) await play(song, from: allMusic);
       }
       ..onBrowse = _browseForCar;
+    _playbackReady = true;
+    _updateNotificationControls();
   }
 
   List<Song> get allMusic => {
@@ -296,12 +311,65 @@ extension MusicListeningActions on MusicController {
     math.Random? random,
     MusicRandomScope? scope,
   }) async {
-    final choices = pool.length > 1
-        ? pool.where((s) => s.id != current?.id).toList()
-        : pool;
+    var choices = pool
+        .where(
+          (s) =>
+              s.id != current?.id &&
+              (current == null || !sameMusicRecording(s, current!)),
+        )
+        .toList();
+    if (choices.isEmpty) choices = pool;
+    if (current != null &&
+        (scope == MusicRandomScope.stream ||
+            scope == MusicRandomScope.library)) {
+      final memberships = <String, Set<String>>{};
+      for (final playlist in personal.playlists) {
+        for (final track in playlist.tracks) {
+          memberships
+              .putIfAbsent(track.id, () => {})
+              .add('playlist:${playlist.id}');
+        }
+      }
+      Set<String> groups(Song song) {
+        final result = <String>{
+          for (final id in song.categoryIds) 'category:$id',
+          ...?memberships[song.id],
+        };
+        if (result.isEmpty && song.isProvider) {
+          // Online tracks use albums when the provider has no category IDs.
+          if (song.album.trim().isNotEmpty) {
+            result.add('album:${song.album.trim().toLowerCase()}');
+          } else if (song.albumId.isNotEmpty) {
+            result.add('album:${song.providerId}:${song.albumId}');
+          } else if (song.artist.trim().isNotEmpty) {
+            result.add('artist:${song.artist.trim().toLowerCase()}');
+          }
+        }
+        return result.isEmpty ? {'ungrouped'} : result;
+      }
+
+      final activeGroups = groups(current!);
+      final otherGroups = choices
+          .where((song) => groups(song).intersection(activeGroups).isEmpty)
+          .toList();
+      if (otherGroups.isNotEmpty) {
+        choices = otherGroups;
+      } else if (activeGroups.contains('ungrouped')) {
+        final queuedIds = playback.queue.tracks.map((s) => s.id).toSet();
+        final outsideQueue = choices
+            .where((s) => !queuedIds.contains(s.id))
+            .toList();
+        if (outsideQueue.isNotEmpty) choices = outsideQueue;
+      }
+    }
     final selected = choices[(random ?? math.Random()).nextInt(choices.length)];
     playback.queue.setShuffle(true);
-    await play(selected, from: pool, randomScope: scope);
+    await play(
+      selected,
+      from: pool,
+      randomScope: scope,
+      restrictToQueue: scope == null,
+    );
   }
 
   Future<void> playRandom(MusicRandomScope scope, {math.Random? random}) async {
@@ -392,6 +460,7 @@ extension MusicListeningActions on MusicController {
           ...playback.queue.toJson(),
           'positionMs': playback.position.value.inMilliseconds,
           'randomScope': _randomScope?.name,
+          'restrictToQueue': _queueRestricted,
         }),
       ),
     );
@@ -403,6 +472,7 @@ extension MusicListeningActions on MusicController {
         _prefs.getString(_accountKey('playback_queue_v1')) ?? '{}',
       );
       playback.queue.restore(saved);
+      _queueRestricted = saved['restrictToQueue'] == true;
       _randomScope = MusicRandomScope.values
           .where((s) => s.name == saved['randomScope'])
           .firstOrNull;
@@ -428,6 +498,7 @@ extension MusicListeningActions on MusicController {
     if (_accountUid == account) return;
     streamRandomTracks = const [];
     _randomScope = null;
+    _queueRestricted = false;
     final generation = ++_accountGeneration;
     await _accessSubscription?.cancel();
     _accessSubscription = null;
@@ -591,7 +662,7 @@ extension MusicListeningActions on MusicController {
     if (tracks.isEmpty) return;
     if (shuffle) tracks.shuffle();
     playback.queue.setShuffle(shuffle);
-    await play(tracks.first, from: tracks);
+    await play(tracks.first, from: tracks, restrictToQueue: true);
   }
 
   void setSongsLiked(Iterable<Song> songs, bool value) {

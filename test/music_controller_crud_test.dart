@@ -305,13 +305,34 @@ void main() {
           categoryId: 'c1',
           publicId: 'nexmusic/b',
         ),
-        // Not an upload, so it is neither cleaned nor named.
+        // Legacy catalogue entry without a Cloudinary public id can be cleaned.
         Song(id: 'c', title: '01 Stream', kind: 'audio', url: 'u'),
       ];
     addTearDown(controller.dispose);
-    expect(controller.songsWithTrackNumbers.map((s) => s.id), ['a']);
+    expect(controller.songsWithTrackNumbers.map((s) => s.id), ['a', 'c']);
     expect(controller.cloudinarySongs.map((s) => s.id), ['a', 'b']);
   });
+
+  test(
+    'admin cleanup removes all leading number lengths and preserves internal digits',
+    () {
+      for (final (title, expected) in [
+        ('001 - Song', 'Song'),
+        ('12345 Song', 'Song'),
+        ('1234Song', 'Song'),
+        ('220200Song', 'Song'),
+        ('  01.02 - Song 2', 'Song 2'),
+        ('1942 A Love Story', 'A Love Story'),
+        ('Song 123', 'Song 123'),
+        ('12', '12'),
+        ('  12345  ', '12345'),
+      ]) {
+        final cleaned = withoutTrackNumber(title, allLeadingNumbers: true);
+        expect(cleaned, expected, reason: title);
+        expect(withoutTrackNumber(cleaned, allLeadingNumbers: true), cleaned);
+      }
+    },
+  );
 
   test('formats phones cannot play are streamed as MP3 or MP4', () {
     const base = 'https://res.cloudinary.com/demo/video/upload/v1/nexmusic/abc';

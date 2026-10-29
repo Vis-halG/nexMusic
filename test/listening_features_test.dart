@@ -121,6 +121,126 @@ void main() {
     expect(music.notice, 'No playable songs here.');
     music.dispose();
   });
+
+  test(
+    'main Library random play switches categories and avoids overlapping memberships',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final music = MusicController(
+        await SharedPreferences.getInstance(),
+        player: _PlaybackFake(),
+      );
+      music.personal.settings.values['gapless'] = false;
+      final a = song('a').copyWith(categoryId: 'a'),
+          b = song('b').copyWith(categoryId: 'b'),
+          overlap = song(
+            'overlap',
+          ).copyWith(categoryId: 'a', extraCategoryIds: ['b']);
+      music.songs = [a, b, overlap];
+      await music.play(a, from: [a, overlap]);
+      for (var i = 0; i < 12; i++) {
+        final previous = music.current!;
+        await music.playRandom(MusicRandomScope.library, random: Random(i));
+        expect(
+          music.current!.categoryIds.toSet().intersection(
+            previous.categoryIds.toSet(),
+          ),
+          isEmpty,
+        );
+        expect(music.playback.queue.tracks.length, 3);
+      }
+      music.dispose();
+    },
+  );
+
+  test('main Library random play switches playlists', () async {
+    SharedPreferences.setMockInitialValues({});
+    final music = MusicController(
+      await SharedPreferences.getInstance(),
+      player: _PlaybackFake(),
+    );
+    music.personal.settings.values['gapless'] = false;
+    final first = [song('one'), song('two')],
+        second = [song('three'), song('four')];
+    music.personal.createPlaylist('First', tracks: first);
+    music.personal.createPlaylist('Second', tracks: second);
+    await music.play(first.first, from: first);
+    for (var i = 0; i < 10; i++) {
+      final wasFirst = first.any((s) => s.id == music.current!.id);
+      await music.playRandom(MusicRandomScope.library, random: Random(i));
+      expect(first.any((s) => s.id == music.current!.id), !wasFirst);
+    }
+    music.dispose();
+  });
+
+  test(
+    'main Stream random play changes online albums and excludes library-only songs',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final music = MusicController(
+        await SharedPreferences.getInstance(),
+        player: _PlaybackFake(),
+        musicProvider: _HeaderProvider(),
+      );
+      music.personal.settings.values['gapless'] = false;
+      final a = song('sa', provider: 'header').copyWith(album: 'First album'),
+          b = song('sb', provider: 'header').copyWith(album: 'Second album');
+      music.providerSongs = [
+        a,
+        b,
+        a.copyWith(id: 'sa2', title: 'Another recording'),
+      ];
+      music.songs = [song('library-only')];
+      await music.play(a, from: [a]);
+      for (var i = 0; i < 10; i++) {
+        final previousAlbum = music.current!.album;
+        await music.playRandom(MusicRandomScope.stream, random: Random(i));
+        expect(music.current!.album, isNot(previousAlbum));
+        expect(music.current!.isProvider, true);
+      }
+      music.dispose();
+    },
+  );
+
+  test(
+    'a scoped shuffle cannot append radio outside its list, including after restore',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final music = MusicController(
+        prefs,
+        player: _PlaybackFake(),
+        musicProvider: _HeaderProvider(),
+      );
+      music.personal.settings.values['gapless'] = false;
+      final tracks = [
+        song('pa', provider: 'header'),
+        song('pb', provider: 'header'),
+      ];
+      await music.playRandomFrom(tracks, random: Random(0));
+      await music.playback.onQueueEnd!();
+      expect(music.playback.queue.tracks.map((s) => s.id).toSet(), {
+        'pa',
+        'pb',
+      });
+      expect(
+        jsonDecode(prefs.getString('playback_queue_v1')!)['restrictToQueue'],
+        true,
+      );
+      final restored = MusicController(
+        prefs,
+        player: _PlaybackFake(),
+        musicProvider: _HeaderProvider(),
+      );
+      await restored.playback.onQueueEnd!();
+      expect(restored.playback.queue.tracks.map((s) => s.id).toSet(), {
+        'pa',
+        'pb',
+      });
+      restored.dispose();
+      music.dispose();
+    },
+  );
   test(
     'play after completion restarts from the beginning, while an idle saved queue resumes its position',
     () async {

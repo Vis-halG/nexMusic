@@ -18,7 +18,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # of the product and file versions while build-number is used as the build suffix.
 # The build number stays above 4001, the x86_64 split test build, so a new APK
 # installs over any earlier test APK instead of failing as a downgrade.
-version: 0.4.12+8035
+version: 0.4.13+8036
 
 environment:
   sdk: ^3.12.2
@@ -34,6 +34,7 @@ dependencies:
     sdk: flutter
 
   provider: ^6.1.5+1
+  flutter_svg: ^2.3.2
   shared_preferences: ^2.5.5
   just_audio: ^0.10.6
   receive_sharing_intent: 1.8.1
@@ -74,7 +75,7 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
-    - assets/branding/nexmusic-logo.png
+    - assets/branding/nexmusic-logo.svg
 
   fonts:
     - family: Poppins

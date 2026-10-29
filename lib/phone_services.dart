@@ -71,6 +71,67 @@ Activity categoryDeleteActivity(String name, {int songs = 0}) => (
       : '$name · $songs song${songs == 1 ? '' : 's'} removed',
 );
 
+enum NotificationPlayerAction {
+  like('Like'),
+  shuffle('Shuffle'),
+  repeat('Repeat'),
+  close('Close'),
+  none('None');
+
+  const NotificationPlayerAction(this.label);
+  final String label;
+  static NotificationPlayerAction parse(String value) =>
+      values.where((action) => action.name == value).firstOrNull ?? none;
+}
+
+/// Three transport buttons stay reachable; Android has two extra action slots.
+List<MediaControl> notificationPlayerControls({
+  required bool playing,
+  NotificationPlayerAction first = NotificationPlayerAction.like,
+  NotificationPlayerAction second = NotificationPlayerAction.close,
+  bool liked = false,
+  bool shuffled = false,
+  AudioServiceRepeatMode repeatMode = AudioServiceRepeatMode.none,
+}) => [
+  MediaControl.skipToPrevious,
+  if (playing) MediaControl.pause else MediaControl.play,
+  MediaControl.skipToNext,
+  for (final action in {first, second})
+    if (action != NotificationPlayerAction.none)
+      switch (action) {
+        NotificationPlayerAction.like => MediaControl.custom(
+          androidIcon: liked
+              ? 'drawable/ic_player_liked'
+              : 'drawable/ic_player_like',
+          label: liked ? 'Unlike' : 'Like',
+          name: 'toggleLike',
+        ),
+        NotificationPlayerAction.shuffle => MediaControl.custom(
+          androidIcon: shuffled
+              ? 'drawable/ic_player_shuffle_on'
+              : 'drawable/ic_player_shuffle',
+          label: shuffled ? 'Turn shuffle off' : 'Turn shuffle on',
+          name: 'toggleShuffle',
+        ),
+        NotificationPlayerAction.repeat => MediaControl.custom(
+          androidIcon: repeatMode == AudioServiceRepeatMode.one
+              ? 'drawable/ic_player_repeat_one'
+              : 'drawable/ic_player_repeat',
+          label: switch (repeatMode) {
+            AudioServiceRepeatMode.none => 'Repeat all',
+            AudioServiceRepeatMode.one => 'Turn repeat off',
+            _ => 'Repeat one',
+          },
+          name: 'toggleRepeat',
+        ),
+        _ => const MediaControl(
+          androidIcon: 'drawable/ic_player_close',
+          label: 'Close player',
+          action: MediaAction.stop,
+        ),
+      },
+];
+
 /// Shows playback controls on the lock screen and in the notification bar,
 /// and keeps music playing while nexMusic is in the background.
 class NexAudioHandler extends BaseAudioHandler with SeekHandler {
@@ -102,21 +163,47 @@ class NexAudioHandler extends BaseAudioHandler with SeekHandler {
 
   /// Set by the controller so the notification buttons follow the app queue.
   Future<void> Function()? onNext, onPrevious;
+  Future<void> Function()? onLike, onShuffle, onRepeat;
+  NotificationPlayerAction _first = NotificationPlayerAction.like,
+      _second = NotificationPlayerAction.close;
+  bool _liked = false, _shuffled = false;
+  AudioServiceRepeatMode _repeatMode = AudioServiceRepeatMode.none;
+
+  void configureControls({
+    required NotificationPlayerAction first,
+    required NotificationPlayerAction second,
+    required bool liked,
+    required bool shuffled,
+    required AudioServiceRepeatMode repeatMode,
+  }) {
+    if ((_first, _second, _liked, _shuffled, _repeatMode) ==
+        (first, second, liked, shuffled, repeatMode)) {
+      return;
+    }
+    _first = first;
+    _second = second;
+    _liked = liked;
+    _shuffled = shuffled;
+    _repeatMode = repeatMode;
+    _broadcast();
+  }
 
   void _broadcast() {
     final playing = player.playing;
     playbackState.add(
       playbackState.value.copyWith(
-        controls: [
-          MediaControl.skipToPrevious,
-          if (playing) MediaControl.pause else MediaControl.play,
-          MediaControl.skipToNext,
-          const MediaControl(
-            androidIcon: 'drawable/ic_player_close',
-            label: 'Close player',
-            action: MediaAction.stop,
-          ),
-        ],
+        controls: notificationPlayerControls(
+          playing: playing,
+          first: _first,
+          second: _second,
+          liked: _liked,
+          shuffled: _shuffled,
+          repeatMode: _repeatMode,
+        ),
+        shuffleMode: _shuffled
+            ? AudioServiceShuffleMode.all
+            : AudioServiceShuffleMode.none,
+        repeatMode: _repeatMode,
         systemActions: const {
           MediaAction.seek,
           MediaAction.seekForward,
@@ -181,6 +268,24 @@ class NexAudioHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> skipToPrevious() async => onPrevious?.call();
+
+  @override
+  Future<dynamic> customAction(
+    String name, [
+    Map<String, dynamic>? extras,
+  ]) async {
+    switch (name) {
+      case 'toggleLike':
+        await onLike?.call();
+      case 'toggleShuffle':
+        await onShuffle?.call();
+      case 'toggleRepeat':
+        await onRepeat?.call();
+      default:
+        return super.customAction(name, extras);
+    }
+    _broadcast();
+  }
 
   @override
   Future<void> playFromMediaId(

@@ -229,13 +229,13 @@ void main() {
       expect(find.text('0 songs selected'), findsOneWidget);
       expect(
         tester
-            .widget<TextButton>(find.widgetWithText(TextButton, 'Play'))
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Queue'))
             .onPressed,
         isNull,
       );
       expect(
         tester
-            .widget<TextButton>(find.widgetWithText(TextButton, 'Playlist'))
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Like'))
             .onPressed,
         isNull,
       );
@@ -259,7 +259,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Track a'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Play'));
+      await tester.tap(find.widgetWithText(TextButton, 'More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Play selected'));
       await tester.pumpAndSettle();
       expect(music.playback.queue.tracks.map((s) => s.id), ['a', 'c']);
       expect(music.current?.id, 'a');
@@ -281,13 +283,17 @@ void main() {
     );
     await tester.pumpWidget(_app(music, _list()));
     await _selectAll(tester);
-    await tester.tap(find.widgetWithText(TextButton, 'Playlist'));
+    await tester.tap(find.widgetWithText(TextButton, 'More'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add to playlist'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('My mix'));
     await tester.pumpAndSettle();
     expect(playlist.tracks.map((s) => s.id), ['a', 'b']);
     await _selectAll(tester);
-    await tester.tap(find.widgetWithText(TextButton, 'Playlist'));
+    await tester.tap(find.widgetWithText(TextButton, 'More'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add to playlist'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('New playlist'));
     await tester.pumpAndSettle();
@@ -428,7 +434,7 @@ void main() {
     expect(tester.takeException(), isNull);
     tester.view.physicalSize = const Size(640, 320);
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(TextButton, 'Playlist'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'More'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await _finish(tester, music);
   });
@@ -656,7 +662,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         tester
-            .widget<TextButton>(find.widgetWithText(TextButton, 'Play'))
+            .widget<IconButton>(
+              find.widgetWithIcon(IconButton, Icons.shuffle_rounded),
+            )
             .onPressed,
         isNull,
       );
@@ -668,7 +676,7 @@ void main() {
       );
       expect(
         tester
-            .widget<TextButton>(find.widgetWithText(TextButton, 'Playlist'))
+            .widget<TextButton>(find.widgetWithText(TextButton, 'More'))
             .onPressed,
         isNotNull,
       );
@@ -712,6 +720,82 @@ void main() {
     expect(tester.takeException(), isNull);
     await _finish(tester, music);
   });
+
+  testWidgets(
+    'selection pill has Queue Like Download More with a separate circular shuffle',
+    (tester) async {
+      _phone(tester);
+      final music = await _music()
+        ..songs = [_song('a'), _song('b'), _song('c')];
+      await tester.pumpWidget(_app(music, _list()));
+      await tester.longPress(find.text('Track a'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Track c'));
+      await tester.pumpAndSettle();
+      final pill = find.byKey(const ValueKey('selection-actions-pill'));
+      expect(tester.widget<Material>(pill).shape, isA<StadiumBorder>());
+      expect(
+        tester.getRect(pill).right,
+        lessThan(tester.getRect(find.byTooltip('Shuffle selected')).left),
+      );
+      expect(
+        tester.getCenter(find.text('Queue')).dx,
+        lessThan(tester.getCenter(find.text('Like')).dx),
+      );
+      expect(
+        tester.getCenter(find.text('Like')).dx,
+        lessThan(tester.getCenter(find.text('Download')).dx),
+      );
+      expect(
+        tester.getCenter(find.text('Download')).dx,
+        lessThan(tester.getCenter(find.text('More')).dx),
+      );
+      await tester.tap(find.byTooltip('Shuffle selected'));
+      await tester.pumpAndSettle();
+      expect(music.playback.queue.tracks.map((s) => s.id).toSet(), {'a', 'c'});
+      expect(music.playback.queue.shuffled, true);
+      expect(find.byType(Checkbox), findsNothing);
+      expect(tester.takeException(), isNull);
+      await _finish(tester, music);
+    },
+  );
+
+  testWidgets(
+    'pill Download queues selected songs and skips local or saved files',
+    (tester) async {
+      _phone(tester);
+      final directory = Directory.systemTemp.createTempSync(
+        'nexmusic-pill-download-',
+      );
+      final saved = File('${directory.path}/saved.mp3')
+        ..writeAsBytesSync([1, 2, 3]);
+      final music = await _music()
+        ..songs = [
+          _song('a'),
+          _song('b'),
+          _song('local:device'),
+          _song('saved'),
+          _song('unselected'),
+        ];
+      music.offlineSongs['saved'] = saved.path;
+      music.downloads.pause();
+      await tester.pumpWidget(_app(music, _list()));
+      await tester.longPress(find.text('Track a'));
+      await tester.pumpAndSettle();
+      for (final name in ['Track b', 'Track local:device', 'Track saved']) {
+        await tester.tap(find.text(name));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.widgetWithText(TextButton, 'Download'));
+      await tester.pumpAndSettle();
+      expect(music.downloads.jobs.keys.toSet(), {'a', 'b'});
+      expect(find.byType(Checkbox), findsNothing);
+      expect(saved.existsSync(), true);
+      expect(tester.takeException(), isNull);
+      await _finish(tester, music);
+      directory.deleteSync(recursive: true);
+    },
+  );
 }
 
 class _SelectionPlayer extends Fake implements AudioPlayer {

@@ -3,7 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:audio_service/audio_service.dart' show MediaItem;
+import 'package:audio_service/audio_service.dart'
+    show MediaItem, AudioServiceRepeatMode;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -116,12 +117,15 @@ String? uploadKindFor(String fileName) {
 /// [title] without the track number many downloaded files start with, such
 /// as "07 ", "1 20 " or a six-digit "220200" stuck to the name. Returns
 /// [title] unchanged if nothing else would be left.
-String withoutTrackNumber(String title) {
-  final cleaned = title.replaceFirst(_trackNumber, '').trim();
+String withoutTrackNumber(String title, {bool allLeadingNumbers = false}) {
+  final cleaned = title
+      .replaceFirst(allLeadingNumbers ? _leadingNumbers : _trackNumber, '')
+      .trim();
   return cleaned.isEmpty ? title.trim() : cleaned;
 }
 
 final _trackNumber = RegExp(r'^\s*(?:\d{6}(?=\D)|(?:\d{1,3}[\s._\-–—:)]+)+)');
+final _leadingNumbers = RegExp(r'^\s*\d+(?:[\s._\-–—:)]+\d+)*[\s._\-–—:)]*');
 
 /// Returns the first YouTube link in shared text, or null if there is none.
 String? youtubeLinkIn(String text) {
@@ -474,6 +478,7 @@ class MusicController extends ChangeNotifier {
   MusicSocial? social;
   late MusicDownloads downloads;
   late ListeningPlayer playback;
+  bool _playbackReady = false;
   late final MusicLyricsService lyricsService = MusicLyricsService(_prefs);
   Future<void> _accountSwitch = Future.value();
   String _accountUid = 'guest';
@@ -575,6 +580,7 @@ class MusicController extends ChangeNotifier {
   List<Song> queue = const [];
   List<Song> streamRandomTracks = const [];
   MusicRandomScope? _randomScope;
+  bool _queueRestricted = false;
   List<MediaFolder> mediaFolders = const [
     MediaFolder(id: 'local-imports', name: 'My Imports'),
   ];
@@ -1090,11 +1096,28 @@ class MusicController extends ChangeNotifier {
     super.notifyListeners();
     _showUploadProgress();
     _scheduleWidgetUpdate();
+    if (_playbackReady) _updateNotificationControls();
   }
 
   // ── Widgets and notifications ────────────────────────────────────────────
 
   static const _uploadNotificationId = 1001;
+
+  void _updateNotificationControls() => _audioHandler?.configureControls(
+    first: NotificationPlayerAction.parse(
+      personal.settings.text('notificationShortcut1', 'like'),
+    ),
+    second: NotificationPlayerAction.parse(
+      personal.settings.text('notificationShortcut2', 'close'),
+    ),
+    liked: current != null && isLiked(current!),
+    shuffled: playback.queue.shuffled,
+    repeatMode: switch (playback.queue.repeat) {
+      MusicRepeat.off => AudioServiceRepeatMode.none,
+      MusicRepeat.all => AudioServiceRepeatMode.all,
+      MusicRepeat.one => AudioServiceRepeatMode.one,
+    },
+  );
 
   MediaItem _mediaItem(Song song, {Duration? duration}) {
     final category = song.isPrivate ? 'Private library' : songSource(song);
@@ -1285,6 +1308,7 @@ class MusicController extends ChangeNotifier {
     List<Song>? from,
     Duration? initialPosition,
     MusicRandomScope? randomScope,
+    bool restrictToQueue = false,
   }) async {
     if (song.isVideo) return;
     if (isStreamingLink(song.url)) {
@@ -1307,6 +1331,9 @@ class MusicController extends ChangeNotifier {
       );
       return;
     }
+    _queueRestricted =
+        restrictToQueue ||
+        (from == null && current?.id == song.id && _queueRestricted);
     _randomScope =
         randomScope ??
         (from == null && current?.id == song.id ? _randomScope : null);
@@ -1536,7 +1563,8 @@ class MusicController extends ChangeNotifier {
     feedback: Map<String, int>.from(personal.stats()['feedback'] as Map),
   );
 
-  Future<void> previous() => playback.previous();
+  Future<void> previous({bool restartCurrent = true}) =>
+      playback.previous(restartCurrent: restartCurrent);
 
   void toggleLike(Song song) {
     if (!liked.add(song.id)) liked.remove(song.id);
@@ -1571,9 +1599,9 @@ class MusicController extends ChangeNotifier {
     community.play(song);
   }
 
-  void toggleShuffle() {
+  Future<void> toggleShuffle() async {
     playback.queue.setShuffle(!playback.queue.shuffled);
-    unawaited(playback.queueChanged());
+    await playback.queueChanged();
   }
 
   Future<void> toggleRepeat() async {
@@ -2527,13 +2555,22 @@ class MusicController extends ChangeNotifier {
       for (final item in songs) ids.contains(item.id) ? edit(item) : item,
     ];
     if (current != null && ids.contains(current!.id)) current = edit(current!);
+    for (var index = 0; index < playback.queue.tracks.length; index++) {
+      final song = playback.queue.tracks[index];
+      if (ids.contains(song.id)) playback.queue.tracks[index] = edit(song);
+    }
+    queue = List.of(playback.queue.tracks);
+    if (current != null && ids.contains(current!.id)) {
+      _audioHandler?.mediaItem.add(_mediaItem(current!));
+    }
+    _saveQueue();
     _scheduleCatalogSave();
   }
 
   /// Uploads whose titles start with a track number.
   List<Song> get songsWithTrackNumbers => [
     for (final song in songs)
-      if (song.publicId != null && withoutTrackNumber(song.title) != song.title)
+      if (withoutTrackNumber(song.title, allLeadingNumbers: true) != song.title)
         song,
   ];
 
@@ -2566,14 +2603,17 @@ class MusicController extends ChangeNotifier {
         final writes = firestore.batch();
         for (final song in batch) {
           writes.update(firestore.collection('songs').doc(song.id), {
-            'title': withoutTrackNumber(song.title),
+            'title': withoutTrackNumber(song.title, allLeadingNumbers: true),
             'updatedAt': FieldValue.serverTimestamp(),
           });
         }
         await writes.commit();
-        _editSongs({
-          for (final song in batch) song.id,
-        }, (song) => song.copyWith(title: withoutTrackNumber(song.title)));
+        _editSongs(
+          {for (final song in batch) song.id},
+          (song) => song.copyWith(
+            title: withoutTrackNumber(song.title, allLeadingNumbers: true),
+          ),
+        );
         onProgress?.call((start + batch.length) / total);
       }
     } on FirebaseException catch (error) {
@@ -3442,6 +3482,7 @@ class MusicController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _playbackReady = false;
     unawaited(_accessSubscription?.cancel());
     _presenceTimer?.cancel();
     community

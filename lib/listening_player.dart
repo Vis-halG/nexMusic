@@ -44,6 +44,15 @@ class ListeningPlayer extends ChangeNotifier {
   DateTime? sleepAt;
   bool sleepAfterTrack = false, sleepFade = true;
   double speed = 1;
+  double _volume = 1, _fadeProgress = 0;
+  double get volume => _volume;
+
+  double get _sleepGain {
+    final remaining = sleepAt?.difference(DateTime.now());
+    if (!sleepFade || remaining == null) return 1;
+    return (remaining.inMilliseconds / 5000).clamp(0.0, 1.0);
+  }
+
   bool _disposed = false,
       _preparing = false,
       _fading = false,
@@ -178,7 +187,7 @@ class ListeningPlayer extends ChangeNotifier {
     try {
       final source = await _source(song);
       if (generation != _generation || _disposed) return;
-      await _player.setVolume(1);
+      await _player.setVolume(_volume * _sleepGain);
       await _player.setSpeed(song.isLongform ? speed : 1);
       await _player.setAudioSources([source], initialPosition: initialPosition);
       if (generation != _generation || _disposed) return;
@@ -249,7 +258,7 @@ class ListeningPlayer extends ChangeNotifier {
   Future<void> queueChanged() async {
     ++_generation;
     _fading = false;
-    await _player.setVolume(1);
+    await _player.setVolume(_volume * _sleepGain);
     _preparedId = null;
     await _standby?.dispose();
     _standby = null;
@@ -286,8 +295,9 @@ class ListeningPlayer extends ChangeNotifier {
     }
   }
 
-  Future<void> previous() async {
-    if (position.value.inSeconds > 4) {
+  Future<void> previous({bool restartCurrent = true}) async {
+    if (_disposed || _advancing) return;
+    if (restartCurrent && position.value.inSeconds > 4) {
       await seek(Duration.zero);
       return;
     }
@@ -337,6 +347,17 @@ class ListeningPlayer extends ChangeNotifier {
   }
 
   Future<void> seek(Duration value) => _player.seek(value);
+
+  /// User volume is independent of the temporary crossfade/sleep envelopes.
+  Future<void> setVolume(double value) async {
+    if (_disposed || !value.isFinite) return;
+    _volume = value.clamp(0.0, 1.0);
+    notifyListeners();
+    final gain = _volume * _sleepGain;
+    await _player.setVolume(gain * (_fading ? 1 - _fadeProgress : 1));
+    if (_fading) await _standby?.setVolume(gain * _fadeProgress);
+  }
+
   Future<void> setSpeed(double value) async {
     speed = value.clamp(0.5, 2.5);
     await _player.setSpeed(speed);
@@ -366,7 +387,7 @@ class ListeningPlayer extends ChangeNotifier {
   void clearSleep() {
     sleepAt = null;
     sleepAfterTrack = false;
-    if (!_disposed) unawaited(_player.setVolume(1));
+    if (!_disposed) unawaited(_player.setVolume(_volume));
     if (!_disposed) notifyListeners();
   }
 
@@ -396,13 +417,11 @@ class ListeningPlayer extends ChangeNotifier {
     if (remaining != null) {
       if (remaining.isNegative) {
         clearSleep();
-        unawaited(pause().then((_) => _player.setVolume(1)));
+        unawaited(pause().then((_) => _player.setVolume(_volume)));
       } else if (sleepFade &&
           remaining.inMilliseconds < 5000 &&
           _player.playing) {
-        unawaited(
-          _player.setVolume((remaining.inMilliseconds / 5000).clamp(0, 1)),
-        );
+        unawaited(_player.setVolume(_volume * _sleepGain));
       }
       notifyListeners();
     }
@@ -429,6 +448,7 @@ class ListeningPlayer extends ChangeNotifier {
       return;
     }
     _fading = true;
+    _fadeProgress = 0;
     final generation = _generation, outgoing = _player;
     unawaited(incoming.play());
     final steps = math.max(1, left.inMilliseconds ~/ 50);
@@ -439,12 +459,13 @@ class ListeningPlayer extends ChangeNotifier {
         await incoming.pause();
         await incoming.seek(Duration.zero);
         await incoming.setVolume(0);
-        await outgoing.setVolume(1);
+        await outgoing.setVolume(_volume);
         _fading = false;
         return;
       }
-      await outgoing.setVolume(1 - i / steps);
-      await incoming.setVolume(i / steps);
+      _fadeProgress = i / steps;
+      await outgoing.setVolume(_volume * (1 - _fadeProgress));
+      await incoming.setVolume(_volume * _fadeProgress);
     }
     if (_disposed || generation != _generation) return;
     _flush(completed: true);

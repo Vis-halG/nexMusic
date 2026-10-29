@@ -1259,6 +1259,15 @@ class ListeningSettingsScreen extends StatelessWidget {
             value: settings.autoplay,
             onChanged: (v) => music.setListeningSetting('autoplay', v),
           ),
+          if (MusicDevice.android)
+            ListTile(
+              leading: const Icon(Icons.tune_rounded),
+              title: const Text('Notification player'),
+              subtitle: const Text('Choose your playback shortcuts'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () =>
+                  _push(context, const NotificationPlayerSettingsScreen()),
+            ),
           SwitchListTile(
             title: const Text('Gapless playback'),
             value: settings.gapless,
