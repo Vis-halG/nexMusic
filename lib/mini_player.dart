@@ -2,47 +2,38 @@ part of 'music_ui.dart';
 
 class MiniPlayer extends StatefulWidget {
   const MiniPlayer({super.key});
-
   @override
   State<MiniPlayer> createState() => _MiniPlayerState();
 }
 
-class _MiniPlayerState extends State<MiniPlayer>
-    with SingleTickerProviderStateMixin {
-  late final _drag = AnimationController.unbounded(vsync: this);
+class _MiniPlayerState extends State<MiniPlayer> {
+  final _surfaceKey = GlobalKey();
   Timer? _volumeDismiss;
   double _swipeStart = 0, _swipeDistance = 0;
-  double _volumeStart = 1, _volumeOrigin = 0;
-  double _direction = -1;
+  double _volumeStart = 1, _volumeOrigin = 0, _volumeOriginX = 0;
+  bool? _volumeHorizontal;
   bool _showVolume = false, _adjustingVolume = false, _skipping = false;
 
   Duration get _duration => MediaQuery.disableAnimationsOf(context)
       ? Duration.zero
-      : const Duration(milliseconds: 260);
+      : const Duration(milliseconds: 180);
 
   @override
   void dispose() {
     _volumeDismiss?.cancel();
-    _drag.dispose();
     super.dispose();
   }
 
-  void _settle() =>
-      _drag.animateTo(0, duration: _duration, curve: Curves.easeOutCubic);
-
   void _swipeBegin(DragStartDetails details) {
     _volumeDismiss?.cancel();
-    _drag.stop();
     _swipeStart = details.globalPosition.dy;
     _swipeDistance = 0;
+    unawaited(context.read<MusicController>().playback.warmAdjacent());
     if (_showVolume) setState(() => _showVolume = false);
   }
 
   void _swipeUpdate(DragUpdateDetails details) {
     _swipeDistance = details.globalPosition.dy - _swipeStart;
-    _drag.value = MediaQuery.disableAnimationsOf(context)
-        ? 0
-        : (_swipeDistance * 0.18).clamp(-14.0, 14.0);
   }
 
   void _swipeEnd(DragEndDetails details) {
@@ -52,7 +43,6 @@ class _MiniPlayerState extends State<MiniPlayer>
         (_swipeDistance.abs() >= 12 && velocity.abs() >= 450);
     final next = _swipeDistance < 0;
     _swipeDistance = 0;
-    _settle();
     if (skip) unawaited(_skip(next));
   }
 
@@ -61,7 +51,6 @@ class _MiniPlayerState extends State<MiniPlayer>
     _volumeDismiss?.cancel();
     final music = context.read<MusicController>();
     setState(() {
-      _direction = next ? -1 : 1;
       _skipping = true;
       _showVolume = false;
     });
@@ -70,7 +59,6 @@ class _MiniPlayerState extends State<MiniPlayer>
       if (next) {
         await music.next();
       } else {
-        // A downward swipe always asks for the previous track, even mid-song.
         await music.previous(restartCurrent: false);
       }
     } catch (_) {
@@ -83,9 +71,10 @@ class _MiniPlayerState extends State<MiniPlayer>
   void _volumeBegin(LongPressStartDetails details) {
     _volumeDismiss?.cancel();
     _swipeDistance = 0;
-    _settle();
     _volumeStart = context.read<MusicController>().playback.volume;
     _volumeOrigin = details.globalPosition.dy;
+    _volumeOriginX = details.globalPosition.dx;
+    _volumeHorizontal = null;
     setState(() {
       _adjustingVolume = true;
       _showVolume = true;
@@ -99,8 +88,23 @@ class _MiniPlayerState extends State<MiniPlayer>
       180.0,
       280.0,
     );
+    final dx = details.globalPosition.dx - _volumeOriginX;
+    final dy = _volumeOrigin - details.globalPosition.dy;
+    if (dx == 0 && dy == 0) return;
+    _volumeHorizontal ??= dx.abs() > dy.abs();
+    _setVolume(_volumeStart + (_volumeHorizontal! ? dx : dy) / travel);
+  }
+
+  void _volumeDragBegin(DragStartDetails details) {
+    _volumeDismiss?.cancel();
+    _volumeStart = context.read<MusicController>().playback.volume;
+    _volumeOriginX = details.globalPosition.dx;
+    setState(() => _adjustingVolume = true);
+  }
+
+  void _volumeDragUpdate(DragUpdateDetails details) {
     _setVolume(
-      _volumeStart + (_volumeOrigin - details.globalPosition.dy) / travel,
+      _volumeStart + (details.globalPosition.dx - _volumeOriginX) / 240,
     );
   }
 
@@ -117,7 +121,7 @@ class _MiniPlayerState extends State<MiniPlayer>
     if (!_adjustingVolume) return;
     setState(() => _adjustingVolume = false);
     _volumeDismiss?.cancel();
-    _volumeDismiss = Timer(const Duration(milliseconds: 650), () {
+    _volumeDismiss = Timer(const Duration(seconds: 2), () {
       if (mounted) setState(() => _showVolume = false);
     });
   }
@@ -132,7 +136,6 @@ class _MiniPlayerState extends State<MiniPlayer>
             bool playing,
             bool loading,
             bool liked,
-            Duration duration,
             String category,
             double volume,
           })
@@ -142,7 +145,6 @@ class _MiniPlayerState extends State<MiniPlayer>
             playing: music.playing,
             loading: music.loading,
             liked: music.current != null && music.isLiked(music.current!),
-            duration: music.duration,
             category: music.current == null || music.current!.isPrivate
                 ? 'Private library'
                 : music.categoryName(music.current!.categoryId),
@@ -155,15 +157,14 @@ class _MiniPlayerState extends State<MiniPlayer>
     final scheme = Theme.of(context).colorScheme;
     final textScaler = MediaQuery.textScalerOf(context);
     final rowHeight = math.max(
-      62.0,
+      66.0,
       textScaler.scale(13) * 1.5 + textScaler.scale(11) * 1.5 + 18,
     );
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
       child: Semantics(
         hint:
-            'Swipe up for next song, down for previous. Hold, then slide up or down to adjust volume.',
+            'Swipe up for next song, down for previous. Hold, then slide left or right, or up and down, to adjust volume.',
         customSemanticsActions: {
           const CustomSemanticsAction(label: 'Next song'): () =>
               unawaited(_skip(true)),
@@ -178,7 +179,6 @@ class _MiniPlayerState extends State<MiniPlayer>
           onPointerCancel: (_) {
             _swipeDistance = 0;
             _volumeEnd();
-            _settle();
           },
           child: GestureDetector(
             key: const ValueKey('mini-player-gestures'),
@@ -187,193 +187,160 @@ class _MiniPlayerState extends State<MiniPlayer>
             onVerticalDragStart: _swipeBegin,
             onVerticalDragUpdate: _swipeUpdate,
             onVerticalDragEnd: _swipeEnd,
-            onVerticalDragCancel: _settle,
+            onVerticalDragCancel: () => _swipeDistance = 0,
             onLongPressStart: _volumeBegin,
             onLongPressMoveUpdate: _volumeMove,
             onLongPressEnd: (_) => _volumeEnd(),
             onLongPressCancel: _volumeEnd,
-            child: AnimatedScale(
-              scale: _adjustingVolume ? 1.015 : 1,
-              duration: _duration,
-              curve: Curves.easeOutCubic,
-              child: TooltipTheme(
-                data: TooltipTheme.of(
-                  context,
-                ).copyWith(triggerMode: TooltipTriggerMode.manual),
-                child: Material(
-                  color: _showVolume
-                      ? Color.alphaBlend(
-                          NexMusic.violet.withValues(alpha: 0.06),
-                          scheme.surfaceContainerHigh,
-                        )
-                      : scheme.surfaceContainerHigh,
-                  shape: const StadiumBorder(),
-                  elevation: _adjustingVolume ? 8 : 6,
-                  animationDuration: _duration,
-                  shadowColor: Colors.black.withValues(alpha: 0.35),
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    onTap: () {
-                      if (_showVolume) {
-                        _volumeDismiss?.cancel();
-                        setState(() => _showVolume = false);
-                      } else {
-                        _openPlayer(context);
-                      }
-                    },
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          height: rowHeight,
-                          child: AnimatedSwitcher(
-                            duration: _duration,
-                            switchInCurve: Curves.easeOutCubic,
-                            switchOutCurve: Curves.easeInCubic,
-                            layoutBuilder: (current, previous) => Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                for (final child in previous)
-                                  IgnorePointer(
-                                    child: ExcludeSemantics(child: child),
-                                  ),
-                                ?current,
-                              ],
-                            ),
-                            transitionBuilder: (child, animation) =>
-                                FadeTransition(
-                                  opacity: animation,
-                                  child: ScaleTransition(
-                                    scale: Tween(
-                                      begin: 0.97,
-                                      end: 1.0,
-                                    ).animate(animation),
-                                    child: child,
-                                  ),
-                                ),
-                            child: _showVolume
-                                ? _MiniPlayerVolume(
-                                    key: const ValueKey('volume'),
-                                    volume: state.volume,
-                                  )
-                                : Padding(
-                                    key: const ValueKey('track'),
-                                    padding: const EdgeInsets.fromLTRB(
-                                      8,
-                                      7,
-                                      6,
-                                      7,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Expanded(
-                                          child: AnimatedBuilder(
-                                            animation: _drag,
-                                            builder: (_, child) =>
-                                                Transform.translate(
-                                                  offset: Offset(
-                                                    0,
-                                                    _drag.value,
-                                                  ),
-                                                  child: child,
-                                                ),
-                                            child: ClipRect(
-                                              child: AnimatedSwitcher(
-                                                duration: _duration,
-                                                switchInCurve:
-                                                    Curves.easeOutCubic,
-                                                switchOutCurve:
-                                                    Curves.easeInCubic,
-                                                transitionBuilder: (child, animation) {
-                                                  final incoming =
-                                                      child.key ==
-                                                      ValueKey(song.id);
-                                                  return FadeTransition(
-                                                    opacity: animation,
-                                                    child: SlideTransition(
-                                                      position: Tween(
-                                                        begin: Offset(
-                                                          0,
-                                                          (incoming
-                                                                  ? -_direction
-                                                                  : _direction) *
-                                                              0.3,
-                                                        ),
-                                                        end: Offset.zero,
-                                                      ).animate(animation),
+            onHorizontalDragStart: _showVolume ? _volumeDragBegin : null,
+            onHorizontalDragUpdate: _showVolume ? _volumeDragUpdate : null,
+            onHorizontalDragEnd: _showVolume ? (_) => _volumeEnd() : null,
+            onHorizontalDragCancel: _showVolume ? _volumeEnd : null,
+            child: TooltipTheme(
+              data: TooltipTheme.of(
+                context,
+              ).copyWith(triggerMode: TooltipTriggerMode.manual),
+              child: Material(
+                key: _surfaceKey,
+                color: _showVolume
+                    ? Color.alphaBlend(
+                        NexMusic.violet.withValues(alpha: 0.06),
+                        scheme.surfaceContainerHigh,
+                      )
+                    : scheme.surfaceContainerHigh,
+                shape: const StadiumBorder(),
+                elevation: 6,
+                animationDuration: _duration,
+                shadowColor: Colors.black.withValues(alpha: 0.35),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: () {
+                    if (_showVolume) {
+                      _volumeDismiss?.cancel();
+                      setState(() => _showVolume = false);
+                    } else {
+                      final box = _surfaceKey.currentContext
+                          ?.findRenderObject();
+                      final origin = box is RenderBox && box.hasSize
+                          ? box.localToGlobal(Offset.zero) & box.size
+                          : null;
+                      _openPlayer(
+                        context,
+                        origin: origin,
+                        preview: _MiniPlayerPreview(
+                          song: song,
+                          subtitle: song.artist.isNotEmpty
+                              ? song.artist
+                              : state.category,
+                          playing: state.playing,
+                          liked: state.liked,
+                        ),
+                      );
+                    }
+                  },
+                  child: SizedBox(
+                    height: rowHeight,
+                    child: AnimatedSwitcher(
+                      duration: _duration,
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      transitionBuilder: (child, animation) =>
+                          FadeTransition(opacity: animation, child: child),
+                      child: _showVolume
+                          ? _MiniPlayerVolume(
+                              key: const ValueKey('volume'),
+                              volume: state.volume,
+                            )
+                          : Padding(
+                              key: const ValueKey('track'),
+                              padding: const EdgeInsets.fromLTRB(8, 7, 6, 7),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: ClipRect(
+                                      child: AnimatedSwitcher(
+                                        duration: _duration,
+                                        switchInCurve: Curves.easeOutCubic,
+                                        switchOutCurve: Curves.easeInCubic,
+                                        layoutBuilder: (current, previous) =>
+                                            Stack(
+                                              alignment: Alignment.centerLeft,
+                                              children: [
+                                                for (final child in previous)
+                                                  IgnorePointer(
+                                                    child: ExcludeSemantics(
                                                       child: child,
                                                     ),
-                                                  );
-                                                },
-                                                child: Row(
-                                                  key: ValueKey(song.id),
-                                                  children: [
-                                                    ClipOval(
-                                                      child: _Thumb(
-                                                        icon: song.isVideo
-                                                            ? Icons
-                                                                  .play_arrow_rounded
-                                                            : Icons
-                                                                  .music_note_rounded,
-                                                        imageUrl:
-                                                            song.artworkUrl,
-                                                        size: 44,
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 12),
-                                                    Expanded(
-                                                      child: Column(
-                                                        crossAxisAlignment:
-                                                            CrossAxisAlignment
-                                                                .start,
-                                                        mainAxisSize:
-                                                            MainAxisSize.min,
-                                                        children: [
-                                                          Text(
-                                                            song.title,
-                                                            maxLines: 1,
-                                                            overflow:
-                                                                TextOverflow
-                                                                    .ellipsis,
-                                                            style:
-                                                                const TextStyle(
-                                                                  fontWeight:
-                                                                      FontWeight
-                                                                          .w600,
-                                                                  fontSize: 13,
-                                                                ),
-                                                          ),
-                                                          const SizedBox(
-                                                            height: 2,
-                                                          ),
-                                                          Text(
-                                                            song
-                                                                    .artist
-                                                                    .isNotEmpty
-                                                                ? song.artist
-                                                                : state
-                                                                      .category,
-                                                            maxLines: 1,
-                                                            overflow:
-                                                                TextOverflow
-                                                                    .ellipsis,
-                                                            style: TextStyle(
-                                                              color: scheme
-                                                                  .onSurfaceVariant,
-                                                              fontSize: 11,
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
+                                                  ),
+                                                ?current,
+                                              ],
+                                            ),
+                                        transitionBuilder: (child, animation) =>
+                                            FadeTransition(
+                                              opacity: animation,
+                                              child: child,
+                                            ),
+                                        child: Row(
+                                          key: ValueKey(song.id),
+                                          children: [
+                                            ClipOval(
+                                              child: _Thumb(
+                                                icon: Icons.music_note_rounded,
+                                                imageUrl: song.artworkUrl,
+                                                size: 44,
                                               ),
                                             ),
-                                          ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.stretch,
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Text(
+                                                    song.title,
+                                                    maxLines: 1,
+                                                    softWrap: false,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      fontSize: 13,
+                                                      height: 1.4,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    song.artist.isNotEmpty
+                                                        ? song.artist
+                                                        : state.category,
+                                                    maxLines: 1,
+                                                    softWrap: false,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: TextStyle(
+                                                      color: scheme
+                                                          .onSurfaceVariant,
+                                                      fontSize: 11,
+                                                      height: 1.4,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                        if (!song.isProvider)
-                                          IconButton(
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    width: 44,
+                                    height: 48,
+                                    child: song.isPrivate
+                                        ? null
+                                        : IconButton(
                                             tooltip: state.liked
                                                 ? 'Unlike'
                                                 : 'Like',
@@ -390,75 +357,41 @@ class _MiniPlayerState extends State<MiniPlayer>
                                                   : scheme.onSurfaceVariant,
                                             ),
                                           ),
-                                        if (song.providerId.startsWith('yt'))
-                                          IconButton(
-                                            tooltip: 'Watch Video',
-                                            iconSize: 22,
-                                            visualDensity:
-                                                VisualDensity.compact,
-                                            onPressed: () =>
-                                                _openSongVideo(context, song),
-                                            icon: const Icon(
-                                              Icons.smart_display_rounded,
-                                              color: NexMusic.violet,
-                                            ),
+                                  ),
+                                  SizedBox.square(
+                                    dimension: 48,
+                                    child: IconButton(
+                                      key: const ValueKey('mini-player-play'),
+                                      padding: EdgeInsets.zero,
+                                      tooltip: state.playing ? 'Pause' : 'Play',
+                                      iconSize: 44,
+                                      onPressed: music.togglePlay,
+                                      icon: Stack(
+                                        alignment: Alignment.center,
+                                        children: [
+                                          Icon(
+                                            state.playing
+                                                ? Icons
+                                                      .pause_circle_filled_rounded
+                                                : Icons
+                                                      .play_circle_filled_rounded,
+                                            color: NexMusic.violet,
+                                            size: 44,
                                           ),
-                                        IconButton(
-                                          tooltip: state.playing
-                                              ? 'Pause'
-                                              : 'Play',
-                                          iconSize: 30,
-                                          onPressed: music.togglePlay,
-                                          icon: state.loading
-                                              ? const SizedBox.square(
-                                                  dimension: 20,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                        strokeWidth: 2,
-                                                      ),
-                                                )
-                                              : Icon(
-                                                  state.playing
-                                                      ? Icons
-                                                            .pause_circle_filled_rounded
-                                                      : Icons
-                                                            .play_circle_filled_rounded,
-                                                  color: NexMusic.violet,
-                                                ),
-                                        ),
-                                      ],
+                                          if (state.loading)
+                                            const SizedBox.square(
+                                              dimension: 48,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
                                     ),
                                   ),
-                          ),
-                        ),
-                        ValueListenableBuilder<Duration>(
-                          valueListenable: music.positionListenable,
-                          builder: (_, position, _) {
-                            final total = state.duration.inMilliseconds;
-                            final value = total <= 0
-                                ? 0.0
-                                : (position.inMilliseconds / total).clamp(
-                                    0.0,
-                                    1.0,
-                                  );
-                            return Padding(
-                              padding: const EdgeInsets.fromLTRB(28, 0, 28, 4),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(2),
-                                child: LinearProgressIndicator(
-                                  value: value,
-                                  minHeight: 2.5,
-                                  backgroundColor: scheme.outlineVariant
-                                      .withValues(alpha: 0.3),
-                                  valueColor: const AlwaysStoppedAnimation(
-                                    NexMusic.violet,
-                                  ),
-                                ),
+                                ],
                               ),
-                            );
-                          },
-                        ),
-                      ],
+                            ),
                     ),
                   ),
                 ),
@@ -469,6 +402,88 @@ class _MiniPlayerState extends State<MiniPlayer>
       ),
     );
   }
+}
+
+class _MiniPlayerPreview extends StatelessWidget {
+  const _MiniPlayerPreview({
+    required this.song,
+    required this.subtitle,
+    required this.playing,
+    required this.liked,
+  });
+  final Song song;
+  final String subtitle;
+  final bool playing, liked;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(8, 7, 6, 7),
+    child: Row(
+      children: [
+        ClipOval(
+          child: _Thumb(
+            icon: Icons.music_note_rounded,
+            imageUrl: song.artworkUrl,
+            size: 44,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                song.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 11,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          width: 44,
+          child: song.isPrivate
+              ? null
+              : Icon(
+                  liked
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  size: 20,
+                  color: liked
+                      ? NexMusic.violet
+                      : Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+        ),
+        SizedBox(
+          width: 48,
+          child: Icon(
+            playing
+                ? Icons.pause_circle_filled_rounded
+                : Icons.play_circle_filled_rounded,
+            size: 44,
+            color: NexMusic.violet,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _MiniPlayerVolume extends StatelessWidget {
@@ -534,12 +549,6 @@ class _MiniPlayerVolume extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-            const SizedBox(width: 12),
-            Icon(
-              Icons.unfold_more_rounded,
-              size: 20,
-              color: scheme.onSurfaceVariant,
             ),
           ],
         ),

@@ -68,6 +68,108 @@ Future<_Harness> _mount(
 
 void main() {
   testWidgets(
+    'a tiny horizontal movement after hold adjusts volume and release waits two seconds',
+    (tester) async {
+      final state = await _mount(tester);
+      await state.music.playback.setVolume(0.5);
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('Track 1')),
+      );
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.byIcon(Icons.unfold_more_rounded), findsNothing);
+      await gesture.moveBy(const Offset(3, 0));
+      await tester.pump();
+      expect(state.music.playback.volume, greaterThan(0.5));
+      await gesture.moveBy(const Offset(-6, 0));
+      await tester.pump();
+      expect(state.music.playback.volume, lessThan(0.5));
+      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 1900));
+      expect(find.text('Volume'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 101));
+      await tester.pumpAndSettle();
+      expect(find.text('Volume'), findsNothing);
+      expect(state.music.current?.id, 's1');
+      await state.close();
+    },
+  );
+
+  testWidgets('tap expands the mini surface into the full player and back', (
+    tester,
+  ) async {
+    final state = await _mount(tester);
+    final source = tester.getRect(
+      find.byKey(const ValueKey('mini-player-gestures')),
+    );
+    await tester.tap(find.text('Track 1'));
+    await tester.pump();
+    await tester.pump();
+    final container = find.byKey(const ValueKey('expanding-page-container'));
+    final start = tester.getRect(container);
+    expect(start.width, closeTo(source.width, 1));
+    expect(start.height, closeTo(source.height, 1));
+    await tester.pump(const Duration(milliseconds: 160));
+    final middle = tester.getRect(container);
+    expect(middle.height, greaterThan(start.height));
+    expect(middle.height, lessThan(tester.view.physicalSize.height));
+    expect(tester.takeException(), isNull);
+    await tester.pumpAndSettle();
+    final full = tester.getRect(container);
+    expect(full.topLeft, Offset.zero);
+    expect(full.size, tester.view.physicalSize / tester.view.devicePixelRatio);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 160));
+    expect(tester.getRect(container).height, lessThan(full.height));
+    await tester.pumpAndSettle();
+    expect(container, findsNothing);
+    expect(find.byType(NowPlayingScreen), findsNothing);
+    expect(state.music.current?.id, 's1');
+    await state.close();
+  });
+
+  testWidgets(
+    'mini controls keep their positions through swipes and have no video or timeline',
+    (tester) async {
+      final state = await _mount(tester);
+      final play = find.byKey(const ValueKey('mini-player-play'));
+      final before = tester.getRect(play);
+      expect(tester.widget<IconButton>(play).iconSize, 44);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      state.music.personal.settings.values['gapless'] = true;
+      await state.music.playback.queueChanged();
+      await tester.pumpAndSettle();
+      final loads = state.player.sourceLoads;
+      await tester.drag(
+        find.byKey(const ValueKey('mini-player-gestures')),
+        const Offset(0, -100),
+      );
+      await tester.pump(const Duration(milliseconds: 90));
+      expect(tester.getRect(play), before);
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's2');
+      expect(state.player.sourceLoads, loads);
+      await tester.drag(
+        find.byKey(const ValueKey('mini-player-gestures')),
+        const Offset(0, 100),
+      );
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's1');
+      expect(state.player.sourceLoads, loads);
+      expect(tester.getRect(play), before);
+      final videoSource = _songs[1].copyWith(providerId: 'ytmusic');
+      state.music.playback.queue.replace([videoSource], videoSource);
+      state.music.current = videoSource;
+      state.music.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Watch Video'), findsNothing);
+      expect(tester.getRect(play), before);
+      await state.close();
+    },
+  );
+
+  testWidgets(
     'up and down swipes change exactly one track, including mid-song previous',
     (tester) async {
       final state = await _mount(tester);
@@ -107,7 +209,7 @@ void main() {
       expect(find.byType(NowPlayingScreen), findsNothing);
       await gesture.up();
       await tester.pumpAndSettle();
-      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pump(const Duration(milliseconds: 2100));
       await tester.pumpAndSettle();
       expect(find.text('Volume'), findsNothing);
       expect(find.text('Track 1'), findsOneWidget);

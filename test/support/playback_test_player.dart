@@ -9,6 +9,7 @@ class PlaybackTestPlayer extends Fake implements AudioPlayer {
   final List<double> volumes = [];
   bool isPlaying = false;
   Duration lastSeek = Duration.zero;
+  int sourceLoads = 0, _index = 0;
   @override
   bool get playing => isPlaying;
   @override
@@ -26,7 +27,7 @@ class PlaybackTestPlayer extends Fake implements AudioPlayer {
   @override
   List<AudioSource> get audioSources => sources;
   @override
-  int? get currentIndex => 0;
+  int? get currentIndex => _index;
   @override
   Stream<int?> get androidAudioSessionIdStream => const Stream.empty();
   @override
@@ -53,6 +54,8 @@ class PlaybackTestPlayer extends Fake implements AudioPlayer {
     Duration? initialPosition,
     ShuffleOrder? shuffleOrder,
   }) async {
+    sourceLoads++;
+    _index = initialIndex ?? 0;
     sources
       ..clear()
       ..addAll(audioSources);
@@ -79,7 +82,13 @@ class PlaybackTestPlayer extends Fake implements AudioPlayer {
   @override
   Future<void> seek(Duration? position, {int? index}) async {
     lastSeek = position ?? Duration.zero;
+    if (index != null) _index = index;
   }
+
+  @override
+  Future<void> addAudioSource(AudioSource source) async => sources.add(source);
+  @override
+  Future<void> removeAudioSourceAt(int index) async => sources.removeAt(index);
 
   @override
   Future<void> setSpeed(double speed) async {}

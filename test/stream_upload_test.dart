@@ -168,6 +168,67 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Upload stays active during preparation and completes after leaving the form',
+    (tester) async {
+      final ready = music.pending = Completer<void>();
+      await tester.pumpWidget(
+        app(
+          Scaffold(
+            body: SongTile(song: track, queue: [track]),
+          ),
+        ),
+      );
+      await tester.tap(find.byTooltip('More'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.tap(find.text('Upload to Library'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.ensureVisible(find.text('Bollywood'));
+      await tester.tap(find.text('Bollywood'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      final upload = find.widgetWithText(FilledButton, 'Upload');
+      expect(tester.widget<FilledButton>(upload).onPressed, isNotNull);
+      expect(music.submitted, isNull);
+      await tester.ensureVisible(upload);
+      await tester.tap(upload);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byType(UploadScreen), findsNothing);
+      expect(music.streamUploadJobs.single.submitted, isTrue);
+      ready.complete();
+      for (var i = 0; i < 50 && music.submitted == null; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+      expect(music.submittedCategory, 'bolly');
+      expect(music.submitted!.single.title, track.title);
+      expect(music.streamUploadJobs, isEmpty);
+      expect(find.text('Done'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  test('Library refuses video files before creating an upload queue', () async {
+    final plain = MusicController(await SharedPreferences.getInstance());
+    plain.categories = music.categories;
+    await plain.startUploads([
+      UploadItem(
+        path: 'clip.mp4',
+        name: 'clip.mp4',
+        sizeBytes: 100,
+        title: 'Clip',
+      ),
+    ], categoryId: 'bolly');
+    expect(plain.uploads, isEmpty);
+    expect(plain.notice, contains('audio only'));
+    plain.dispose();
+  });
+
   testWidgets('preparation can be cancelled and provider errors retried', (
     tester,
   ) async {

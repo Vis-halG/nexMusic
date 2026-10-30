@@ -145,7 +145,10 @@ class _PlaylistCsvReviewScreenState extends State<PlaylistCsvReviewScreen> {
                                     .toList(),
                           );
                       Navigator.of(context).pushReplacement<void, void>(
-                        MaterialPageRoute(
+                        NexPageRoute(
+                          reducedMotion: MediaQuery.disableAnimationsOf(
+                            context,
+                          ),
                           builder: (_) => PlaylistScreen(id: p.id),
                         ),
                       );

@@ -50,6 +50,11 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        TransferService.refresh(applicationContext)
+    }
+
     /** Hands a widget action to a running app; a starting app asks for it. */
     private fun deliverPendingAction() {
         val action = pendingAction ?: return
@@ -76,8 +81,7 @@ class MainActivity : AudioServiceActivity() {
         }
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
-            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "video/*"))
+            type = "audio/*"
             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         }
         try {

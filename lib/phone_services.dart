@@ -336,6 +336,17 @@ class PhoneServices {
   /// The widget action that started the app, if any.
   Future<String?> takeLaunchAction() => _call<String>('takeLaunchAction');
 
+  final Set<String> _activeTransfers = {};
+  Future<void> setTransferActive(String owner, bool active) async {
+    final changed = active
+        ? _activeTransfers.add(owner)
+        : _activeTransfers.remove(owner);
+    if (!changed) return;
+    await _call<void>('setTransferActive', {'owner': owner, 'active': active});
+  }
+
+  Future<void> openBatterySettings() => _call<void>('openBatterySettings');
+
   /// Shows or updates an ongoing progress notification. A null [percent]
   /// shows an indeterminate bar.
   Future<void> showProgress(

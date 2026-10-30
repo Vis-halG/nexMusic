@@ -14,7 +14,8 @@ extension MusicListeningActions on MusicController {
       uid: account,
       firestore: _firestore,
       legacy: _auth == null,
-    )..addListener(notifyListeners);
+    )..addListener(_personalChanged);
+    _languageSelection = personal.settings.selectedLanguages;
     community = CommunityActivity(
       prefs: _prefs,
       uid: account,
@@ -119,6 +120,16 @@ extension MusicListeningActions on MusicController {
     notifyListeners();
   }
 
+  void _personalChanged() {
+    final selected = personal.settings.selectedLanguages;
+    if (!setEquals(_languageSelection, selected)) {
+      _languageSelection = selected;
+      streamRandomTracks = visibleSongs(streamRandomTracks);
+      if (_playbackReady) _languageUpdate = playback.applyFilter();
+    }
+    notifyListeners();
+  }
+
   void _initPlayback() {
     playback = ListeningPlayer(
       player: _audio,
@@ -139,6 +150,7 @@ extension MusicListeningActions on MusicController {
         );
       },
       settings: () => personal.settings,
+      canPlay: allowsSong,
       onTrack: (song) {
         current = song;
         if (song.isProvider) _recordStreamSong(song);
@@ -246,7 +258,7 @@ extension MusicListeningActions on MusicController {
       ...library.entries.map((e) => e.song),
     ])
       s.id: s,
-  }.values.toList();
+  }.values.where(allowsSong).toList();
 
   List<Song> randomSongsFor(MusicRandomScope scope) {
     final libraryTracks = <Song>[
@@ -283,8 +295,19 @@ extension MusicListeningActions on MusicController {
     }.values.toList();
   }
 
+  List<Song> get libraryQuickPicks {
+    final savedIds = randomSongsFor(
+      MusicRandomScope.library,
+    ).map((s) => s.id).toSet();
+    return recentSongs
+        .where((s) => !s.isVideo && savedIds.contains(s.id))
+        .take(12)
+        .toList();
+  }
+
   /// Audio a shuffle button may pick on this phone right now.
   bool _randomPlayable(Song s) =>
+      allowsSong(s) &&
       !s.isVideo &&
       !s.isLongform &&
       (!s.url.startsWith('device:') || s.isPrivate) &&
@@ -318,49 +341,9 @@ extension MusicListeningActions on MusicController {
               (current == null || !sameMusicRecording(s, current!)),
         )
         .toList();
-    if (choices.isEmpty) choices = pool;
-    if (current != null &&
-        (scope == MusicRandomScope.stream ||
-            scope == MusicRandomScope.library)) {
-      final memberships = <String, Set<String>>{};
-      for (final playlist in personal.playlists) {
-        for (final track in playlist.tracks) {
-          memberships
-              .putIfAbsent(track.id, () => {})
-              .add('playlist:${playlist.id}');
-        }
-      }
-      Set<String> groups(Song song) {
-        final result = <String>{
-          for (final id in song.categoryIds) 'category:$id',
-          ...?memberships[song.id],
-        };
-        if (result.isEmpty && song.isProvider) {
-          // Online tracks use albums when the provider has no category IDs.
-          if (song.album.trim().isNotEmpty) {
-            result.add('album:${song.album.trim().toLowerCase()}');
-          } else if (song.albumId.isNotEmpty) {
-            result.add('album:${song.providerId}:${song.albumId}');
-          } else if (song.artist.trim().isNotEmpty) {
-            result.add('artist:${song.artist.trim().toLowerCase()}');
-          }
-        }
-        return result.isEmpty ? {'ungrouped'} : result;
-      }
-
-      final activeGroups = groups(current!);
-      final otherGroups = choices
-          .where((song) => groups(song).intersection(activeGroups).isEmpty)
-          .toList();
-      if (otherGroups.isNotEmpty) {
-        choices = otherGroups;
-      } else if (activeGroups.contains('ungrouped')) {
-        final queuedIds = playback.queue.tracks.map((s) => s.id).toSet();
-        final outsideQueue = choices
-            .where((s) => !queuedIds.contains(s.id))
-            .toList();
-        if (outsideQueue.isNotEmpty) choices = outsideQueue;
-      }
+    if (choices.isEmpty) {
+      announce('No other songs available here.');
+      return;
     }
     final selected = choices[(random ?? math.Random()).nextInt(choices.length)];
     playback.queue.setShuffle(true);
@@ -391,14 +374,16 @@ extension MusicListeningActions on MusicController {
 
   List<MusicArtistCategory> get artistCategories => groupSongsByArtist(
     [
-      ...songs,
-      ...allMusic,
-      for (final playlist in personal.playlists) ...playlist.tracks,
-    ].map(
-      (song) => personal.songArtists.containsKey(song.id)
-          ? song.copyWith(artist: personal.songArtists[song.id])
-          : song,
-    ),
+          ...songs,
+          ...allMusic,
+          for (final playlist in personal.playlists) ...playlist.tracks,
+        ]
+        .where(allowsSong)
+        .map(
+          (song) => personal.songArtists.containsKey(song.id)
+              ? song.copyWith(artist: personal.songArtists[song.id])
+              : song,
+        ),
   );
 
   void setSongArtist(Song song, String artist) {
@@ -432,7 +417,10 @@ extension MusicListeningActions on MusicController {
         personal.playlist(parent.replaceFirst('playlist:', ''))?.tracks ??
             <Song>[],
     };
-    return tracks.where((s) => !s.isVideo).map(_mediaItem).toList();
+    return tracks
+        .where((s) => !s.isVideo && allowsSong(s))
+        .map(_mediaItem)
+        .toList();
   }
 
   void _playerChanged() {
@@ -444,6 +432,10 @@ extension MusicListeningActions on MusicController {
     loading = playback.loading;
     duration = playback.duration;
     _audioHandler?.queue.add(queue.map(_mediaItem).toList());
+    if (current == null) {
+      _audioHandler?.mediaItem.add(null);
+      unawaited(phone?.setSessionActive(false));
+    }
     notifyListeners();
   }
 
@@ -472,6 +464,7 @@ extension MusicListeningActions on MusicController {
         _prefs.getString(_accountKey('playback_queue_v1')) ?? '{}',
       );
       playback.queue.restore(saved);
+      playback.queue.retainWhere(allowsSong);
       _queueRestricted = saved['restrictToQueue'] == true;
       _randomScope = MusicRandomScope.values
           .where((s) => s.name == saved['randomScope'])
@@ -496,6 +489,9 @@ extension MusicListeningActions on MusicController {
 
   Future<void> _performAccountSwitch(String account) async {
     if (_accountUid == account) return;
+    for (final job in List.of(streamUploadJobs)) {
+      job.cancel();
+    }
     streamRandomTracks = const [];
     _randomScope = null;
     _queueRestricted = false;
@@ -510,7 +506,7 @@ extension MusicListeningActions on MusicController {
       ..dispose();
     await personal.saved;
     personal
-      ..removeListener(notifyListeners)
+      ..removeListener(_personalChanged)
       ..dispose();
     community
       ..removeListener(notifyListeners)
@@ -629,6 +625,7 @@ extension MusicListeningActions on MusicController {
   }
 
   Future<void> addToQueue(Song song, {bool next = false}) async {
+    if (!allowsSong(song)) return;
     playback.queue.add(song, next: next);
     await playback.queueChanged();
     announce(next ? 'Playing next: ${song.title}' : 'Added to queue');
@@ -639,7 +636,7 @@ extension MusicListeningActions on MusicController {
     bool next = false,
   }) async {
     final tracks = {
-      for (final s in songs.where((s) => !s.isVideo)) s.id: s,
+      for (final s in songs.where((s) => !s.isVideo && allowsSong(s))) s.id: s,
     }.values.toList();
     if (tracks.isEmpty) return;
     // Inserting every track directly after the current one reverses the batch.
@@ -657,7 +654,7 @@ extension MusicListeningActions on MusicController {
     bool shuffle = false,
   }) async {
     final tracks = {
-      for (final s in songs.where((s) => !s.isVideo)) s.id: s,
+      for (final s in songs.where((s) => !s.isVideo && allowsSong(s))) s.id: s,
     }.values.toList();
     if (tracks.isEmpty) return;
     if (shuffle) tracks.shuffle();
@@ -707,6 +704,7 @@ extension MusicListeningActions on MusicController {
       playback.setSleep(duration, afterTrack: afterTrack);
   Future<void> setListeningSetting(String key, Object value) async {
     personal.setSetting(key, value);
+    if (key == 'songLanguages') await _languageUpdate;
     if ({
       'crossfade',
       'gapless',

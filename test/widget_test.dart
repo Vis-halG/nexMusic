@@ -205,7 +205,8 @@ void main() {
     await tester.pumpWidget(_app(controller));
     await tester.pump();
 
-    expect(find.text('Uploading 1 of 2'), findsOneWidget);
+    expect(find.text('Uploading'), findsOneWidget);
+    expect(find.text('1 of 2 processed'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -255,7 +256,7 @@ void main() {
     await tester.pumpWidget(_app(controller, home: const UploadScreen()));
     await tester.pumpAndSettle();
 
-    expect(find.text('Choose songs or videos'), findsOneWidget);
+    expect(find.text('Choose audio songs'), findsOneWidget);
     final upload = find.widgetWithText(FilledButton, 'Upload');
     expect(upload, findsOneWidget);
     expect(tester.widget<FilledButton>(upload).onPressed, isNull);
@@ -309,7 +310,7 @@ void main() {
     expect(find.text('3 of 3 processed'), findsOneWidget);
     expect(find.text('Song A'), findsOneWidget);
     expect(find.text('Retry failed (1)'), findsOneWidget);
-    expect(find.text('Done'), findsOneWidget);
+    expect(find.text('Done'), findsNothing);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());

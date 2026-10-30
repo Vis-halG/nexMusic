@@ -120,3 +120,17 @@ test('a song can list several categories, its main one included',async () => {
   await assertFails(updateDoc(doc(bob,'songs/old'),{categoryIds:['pop'],updatedAt:serverTimestamp()}));
   await assertSucceeds(updateDoc(doc(bob,'songs/both'),{title:'Renamed',updatedAt:serverTimestamp()}));
 });
+
+test('public Library accepts audio only, and legacy videos can be deleted but never restored', async () => {
+  const song = {title:'Track',kind:'audio',categoryId:'pop',url:'https://res.cloudinary.com/demo/a.mp3',publicId:'a',sizeBytes:1000,durationMs:0,ownerUid:'alice',ownerName:'Alice',createdAt:serverTimestamp(),updatedAt:serverTimestamp(),deleted:false};
+  await env.withSecurityRulesDisabled(async context => {
+    const admin = context.firestore();
+    await setDoc(doc(admin,'categories/pop'),{name:'Pop',ownerUid:'owner',createdAt:Timestamp.now()});
+    await setDoc(doc(admin,'songs/legacy-video'),{...song,kind:'video'});
+  });
+  const alice = db('alice');
+  await assertSucceeds(setDoc(doc(alice,'songs/audio'),song));
+  await assertFails(setDoc(doc(alice,'songs/video'),{...song,kind:'video'}));
+  await assertSucceeds(updateDoc(doc(alice,'songs/legacy-video'),{deleted:true,updatedAt:serverTimestamp()}));
+  await assertFails(updateDoc(doc(alice,'songs/legacy-video'),{deleted:false,updatedAt:serverTimestamp()}));
+});

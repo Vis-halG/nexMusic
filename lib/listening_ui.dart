@@ -303,8 +303,9 @@ class PlaylistScreen extends StatelessWidget {
       );
     }
     final edit = p.canEdit(music.personal.uid);
+    final tracks = music.visibleSongs(p.tracks);
     return _SongSelectionScaffold(
-      songs: p.tracks,
+      songs: tracks,
       playlistId: p.id,
       appBar: AppBar(
         title: Text(p.name),
@@ -525,7 +526,7 @@ class PlaylistScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${p.tracks.length} tracks',
+                        '${tracks.length} tracks',
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                       Text(
@@ -551,21 +552,21 @@ class PlaylistScreen extends StatelessWidget {
               runSpacing: 8,
               children: [
                 FilledButton.icon(
-                  onPressed: p.tracks.where((s) => !s.isVideo).isEmpty
+                  onPressed: tracks.where((s) => !s.isVideo).isEmpty
                       ? null
                       : () => music.play(
-                          p.tracks.firstWhere((s) => !s.isVideo),
-                          from: p.tracks,
+                          tracks.firstWhere((s) => !s.isVideo),
+                          from: tracks,
                         ),
                   icon: const Icon(Icons.play_arrow),
                   label: const Text('Play'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: p.tracks.isEmpty
+                  onPressed: tracks.isEmpty
                       ? null
                       : () => _featureTask(
                           context,
-                          () => music.downloads.enqueue(p.tracks),
+                          () => music.downloads.enqueue(tracks),
                         ),
                   icon: const Icon(Icons.download),
                   label: const Text('Download'),
@@ -582,26 +583,37 @@ class PlaylistScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Expanded(
-            child: p.tracks.isEmpty
+            child: tracks.isEmpty
                 ? const Center(
                     child: Text('Add songs from their ⋮ menu or search.'),
                   )
                 : ReorderableListView.builder(
                     padding: const EdgeInsets.only(bottom: 80),
-                    itemCount: p.tracks.length,
+                    itemCount: tracks.length,
                     buildDefaultDragHandles: false,
                     onReorderItem: (oldIndex, newIndex) {
                       if (!edit) return;
                       music.personal.updatePlaylist(p, (p) {
-                        p.tracks.insert(newIndex, p.tracks.removeAt(oldIndex));
+                        final reordered = List<Song>.of(tracks);
+                        reordered.insert(
+                          newIndex,
+                          reordered.removeAt(oldIndex),
+                        );
+                        final visibleIds = tracks.map((s) => s.id).toSet();
+                        var index = 0;
+                        for (var i = 0; i < p.tracks.length; i++) {
+                          if (visibleIds.contains(p.tracks[i].id)) {
+                            p.tracks[i] = reordered[index++];
+                          }
+                        }
                       });
                     },
                     itemBuilder: (context, index) {
-                      final song = p.tracks[index];
+                      final song = tracks[index];
                       return SongTile(
                         key: ValueKey('${song.id}:$index'),
                         song: song,
-                        queue: p.tracks,
+                        queue: tracks,
                         trailing: edit
                             ? Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -614,7 +626,9 @@ class PlaylistScreen extends StatelessWidget {
                                     onPressed: () =>
                                         music.personal.updatePlaylist(
                                           p,
-                                          (p) => p.tracks.removeAt(index),
+                                          (p) => p.tracks.removeWhere(
+                                            (s) => s.id == song.id,
+                                          ),
                                         ),
                                   ),
                                   ReorderableDragStartListener(
@@ -690,6 +704,7 @@ class _PlaylistAddScreenState extends State<PlaylistAddScreen> {
   Widget build(BuildContext context) {
     final music = context.watch<MusicController>(),
         playlist = music.personal.playlist(widget.id);
+    final visible = music.visibleSongs(results);
     return Scaffold(
       appBar: AppBar(title: const Text('Add songs')),
       body: Column(
@@ -714,9 +729,9 @@ class _PlaylistAddScreenState extends State<PlaylistAddScreen> {
           if (busy) const LinearProgressIndicator(),
           Expanded(
             child: ListView.builder(
-              itemCount: results.length,
+              itemCount: visible.length,
               itemBuilder: (_, i) {
-                final song = results[i];
+                final song = visible[i];
                 final added =
                     playlist?.tracks.any((s) => s.id == song.id) ?? false;
                 return ListTile(
@@ -1313,6 +1328,16 @@ class ListeningSettingsScreen extends StatelessWidget {
             title: const Text('Downloads & storage'),
             onTap: () => _push(context, const MusicDownloadsScreen()),
           ),
+          if (MusicDevice.android)
+            ListTile(
+              leading: const Icon(Icons.battery_charging_full_rounded),
+              title: const Text('Background transfers'),
+              subtitle: const Text(
+                'Transfers keep running while locked. For long transfers, open Battery and allow unrestricted background activity.',
+              ),
+              trailing: const Icon(Icons.open_in_new_rounded),
+              onTap: () => music.phone?.openBatterySettings(),
+            ),
           ListTile(
             leading: const Icon(Icons.sync),
             title: const Text('Sync library'),
@@ -1573,7 +1598,7 @@ class DeviceMusicScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final music = context.watch<MusicController>(),
-        tracks = music.personal.localTracks.values.toList();
+        tracks = music.visibleSongs(music.personal.localTracks.values);
     return _SongSelectionScaffold(
       songs: tracks,
       appBar: AppBar(
@@ -1717,7 +1742,7 @@ class LongformScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final music = context.watch<MusicController>(),
-        tracks = music.personal.longformTracks.values.toList();
+        tracks = music.visibleSongs(music.personal.longformTracks.values);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Podcasts & audiobooks'),

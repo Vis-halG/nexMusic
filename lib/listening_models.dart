@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math';
 import 'music_data.dart';
+import 'song_languages.dart';
+import 'music_recommendations.dart';
 import 'package:pointycastle/digests/sha256.dart';
 
 enum MusicRandomScope { home, stream, library }
@@ -40,7 +42,7 @@ class MusicPlaylist {
     int? updatedAt,
     List<String>? members,
     List<String>? editors,
-  }) : tracks = tracks ?? [],
+  }) : tracks = uniqueMusicTracks(tracks ?? []),
        members = members ?? [ownerUid],
        editors = editors ?? [ownerUid],
        updatedAt = updatedAt ?? DateTime.now().millisecondsSinceEpoch;
@@ -125,6 +127,22 @@ class ListeningSettings {
   int get crossfade => number('crossfade', 0).clamp(0, 12);
   int get storageBudgetMb => number('storageBudgetMb', 1024).clamp(64, 16384);
   String get language => text('language', 'Any');
+  Set<String> get selectedLanguages {
+    final stored = values['songLanguages'];
+    if (stored is! List) return {'Hindi', 'English'};
+    return stored
+        .whereType<String>()
+        .map(normalizeSongLanguage)
+        .where((s) => s.isNotEmpty)
+        .toSet();
+  }
+
+  bool allowsLanguage(Song song) {
+    final language = normalizeSongLanguage(song.language);
+    // Untagged songs stay available; guessing could hide the wrong songs.
+    return language.isEmpty || selectedLanguages.contains(language);
+  }
+
   String get mood => text('mood', 'Any');
   MusicQuality quality(String key) => MusicQuality.values.firstWhere(
     (q) => q.name == text(key, 'high'),
@@ -205,6 +223,16 @@ class ListeningQueue {
     return null;
   }
 
+  Song? peekPrevious() {
+    if (history.length > 1) {
+      return tracks
+          .where((s) => s.id == history[history.length - 2])
+          .firstOrNull;
+    }
+    final index = tracks.indexWhere((s) => s.id == currentId);
+    return index > 0 ? tracks[index - 1] : null;
+  }
+
   void add(Song song, {bool next = false}) {
     if (song.isVideo || song.id == currentId) return;
     if (tracks.any((s) => s.id == song.id)) {
@@ -228,6 +256,18 @@ class ListeningQueue {
     tracks.removeWhere((s) => s.id == id);
     _remaining.remove(id);
     history.removeWhere((e) => e == id);
+  }
+
+  /// Also prunes traversal history, so Previous and shuffled repeat cannot
+  /// bring back a track excluded by the listener's current preferences.
+  void retainWhere(bool Function(Song) accepts) {
+    tracks.removeWhere((s) => !accepts(s));
+    final ids = tracks.map((s) => s.id).toSet();
+    history.removeWhere((id) => !ids.contains(id));
+    _remaining.removeWhere((id) => !ids.contains(id));
+    if (!ids.contains(currentId)) {
+      currentId = null;
+    }
   }
 
   void reorder(int oldIndex, int newIndex) {

@@ -13,7 +13,7 @@ import 'music_transfer.dart';
 import 'phone_services.dart';
 
 /// Fallback installed version of nexMusic (matches pubspec.yaml).
-const String currentAppVersion = '0.4.13+8036';
+const String currentAppVersion = '0.4.14+8037';
 
 class AppUpdateInfo {
   const AppUpdateInfo({
@@ -376,6 +376,7 @@ class UpdateDownload extends ChangeNotifier {
       _network!.every((result) => result == ConnectivityResult.none);
 
   Future<void> _run() async {
+    await _phone?.setTransferActive('app-update', true);
     final network = _networkChanges.listen(_networkChanged);
     var stalled = 0, damaged = 0;
     try {
@@ -424,6 +425,7 @@ class UpdateDownload extends ChangeNotifier {
       if (!_stopped) _fail(transferErrorMessage(error));
     } finally {
       await network.cancel();
+      await _phone?.setTransferActive('app-update', false);
     }
   }
 

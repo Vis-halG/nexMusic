@@ -1,16 +1,18 @@
 # nexMusic
 
-Flutter app for shared music, online songs and videos.
-Signed-in listeners can upload songs and videos into shared categories. Files
+Flutter app for shared music, online songs and music videos.
+Signed-in listeners can upload audio songs into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.13+8036` has four tabs: Home, Stream, Library and Profile. Home
+Version `0.4.14+8037` has four tabs: Home, Stream, Library and Profile. Home
 groups public songs and videos into global recently played/watched, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and an Artists chip that lists the people in the For
 you feed. Available music videos open from
 the song player. Library is laid out like Stream: search, chips for liked,
-downloaded, category and playlist songs, and Quick Picks. Holding a chip on
+downloaded, category and playlist songs, and Quick Picks. Library Quick Picks
+uses only songs in the library; stream-only listening history stays in Stream,
+whose Quick Picks uses only online provider songs. Holding a chip on
 Home, Stream or Library drags it into a new order. Device music, the download
 manager and listening with friends are in Profile. Pulling a feed down
 refreshes it with three loading dots above the list.
@@ -26,16 +28,20 @@ Inside a category, playlist, artist, Downloads or device music list, the same
 button shuffles only that list's songs.
 
 Swipe the mini player up for the next song or down for the previous song.
-Hold it, then slide up/down to adjust playback volume; releasing restores the
-song details with a subtle transition. Volume stays at the chosen level across
+Hold it, then slide left/right or up/down to adjust playback volume. Its volume
+bar stays for two seconds after release, then restores song details with a
+subtle fade; the trailing direction arrows are omitted. The mini player keeps its controls fixed, has
+a larger play button, and omits the playback timeline and video shortcut.
+Both adjacent sources resolve in advance; ready native sources are reused
+when skipping forward or backward. Volume stays at the chosen level across
 track changes, crossfades and sleep-timer cancellation. Reduced-motion settings
 are respected. Multi-select actions use a Queue / Like / Download / More pill with a
 separate circular button that shuffles only the selected songs.
 
-On the main Stream and Library screens, Random Play chooses a different
-category or playlist when one is available; online tracks fall back to album
-or artist grouping. Explicit categories, playlists, filters and searches shuffle
-their own tracks and do not append outside radio tracks at the end. Listening
+Random Play avoids the current recording when another is available, without
+forcing a different category, playlist or album. Explicit categories, playlists,
+filters and searches shuffle their own tracks and do not append outside radio
+tracks at the end. Listening
 settings → Notification player lets each account choose two extra shortcuts
 (Like, Shuffle, Repeat, Close or None) on Android 13+, alongside Previous,
 Play/Pause and Next. Earlier Android versions retain the standard transport controls.
@@ -43,6 +49,46 @@ Android controls the notification and lock-screen layout. The owner's Clean up
 song names tool removes leading numeric prefixes of any length, updates queued
 titles, and leaves numbers elsewhere in the title intact.
 The app logo is an SVG, with matching Android vector launcher and splash artwork.
+Launch adds a short logo fade/scale, skipped when reduced motion is enabled.
+Now Playing titles stay on one line with an ellipsis; the details, seek bar and
+transport controls keep their positions when songs or providers change.
+Tapping the mini player expands its pill surface into the full player and
+reverses that transformation on Back. Other app pages share a gentle
+fade/scale entrance. Reduced motion skips these transitions.
+
+Profile → Song languages selects the languages visible and playable throughout
+the app, defaulting to Hindi and English. Preferences persist per account and
+sync with listening settings. Only explicit language metadata is filtered;
+unknown or ambiguous language stays available. Changes prune queue history and
+native preloads, stop an excluded current song, and refresh the Stream feed.
+Playlist membership and saved files are preserved.
+
+Each category and playlist shows a recording once. Duplicate IDs, known
+recordings and file identities are collapsed within that collection, including
+playlist imports and restored data. A song can still belong to several playlists.
+Artist pages fetch successive batches of songs as listeners scroll or tap
+Load more, preserve existing rows during failures, and allow retrying a page.
+Backing out of the keyboard also clears the text field's active focus.
+
+Stream → Upload to Library allows submitting as soon as a category is chosen,
+while preparation is still running. The controller owns that work after the
+form closes, then queues the prepared audio automatically. A top status bar on
+every page distinguishes preparation/conversion/download from actual uploading;
+shared converter jobs report their current stage too. Successful upload status
+clears automatically after two seconds, with no Done step. Failed work retains
+retry controls. Library upload pickers, queue validation and Firestore rules
+accept only audio; existing video entries have been removed from the catalogue.
+
+Android uploads, song downloads, browser transfers and app-update downloads
+share a dataSync foreground service with an ongoing notification and a partial
+wake lock, so locking the phone does not suspend normal transfers. Each task
+releases its service ownership when finished, cancelled or manually paused;
+one finishing transfer cannot stop another. Queues already persist and retry
+temporary network failures. Listening settings → Background transfers opens
+Android app settings for unrestricted battery activity on phones that require
+it. Android Doze, force-stop and manufacturer restrictions still apply; Android
+15 limits background dataSync services to six hours per day. The service handles
+that timeout without crashing, and saved queues resume when the app reopens.
 
 Stream now opens with **For you**, using persisted likes, listening time,
 completed plays, recent history and early skips. Several distinct seed artists

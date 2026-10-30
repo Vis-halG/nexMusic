@@ -18,6 +18,8 @@ import 'music_controller.dart';
 import 'music_ui.dart';
 import 'phone_services.dart';
 import 'personal_music.dart';
+import 'launch_logo.dart';
+import 'keyboard_focus.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -301,6 +303,7 @@ class NexMusic extends StatelessWidget {
           ),
         );
     return MaterialApp(
+      navigatorKey: musicNavigatorKey,
       title: 'nexMusic',
       debugShowCheckedModeBanner: false,
       theme: theme(Brightness.light),
@@ -310,7 +313,15 @@ class NexMusic extends StatelessWidget {
       // Browsers turning shared links into audio run behind every page, and
       // an update download shows its progress under every page.
       builder: (context, child) => SharedAudioHost(
-        child: UpdateDownloadHost(child: child ?? const SizedBox.shrink()),
+        child: KeyboardDismissFocus(
+          child: LaunchLogo(
+            child: UploadStatusHost(
+              child: UpdateDownloadHost(
+                child: child ?? const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ),
       ),
       home: appState.signedIn ? const MusicShell() : const WelcomeScreen(),
     );

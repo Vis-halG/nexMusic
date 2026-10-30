@@ -77,6 +77,31 @@ bool sameMusicRecording(Song a, Song b) {
       musicArtists(a.artist).intersection(musicArtists(b.artist)).isNotEmpty;
 }
 
+/// Uniqueness belongs to each collection; the same recording can be saved
+/// independently in any number of playlists or categories.
+List<Song> uniqueMusicTracks(Iterable<Song> tracks) {
+  final result = <Song>[];
+  final recordings = MusicRecordingIndex<Song>((s) => s);
+  final files = <String>{};
+  for (final song in tracks) {
+    final scheme = Uri.tryParse(song.url)?.scheme;
+    final file = (song.publicId?.isNotEmpty ?? false)
+        ? '${song.kind}:cloud:${song.publicId}'
+        : !song.isProvider &&
+              {'https', 'http', 'file', 'content'}.contains(scheme)
+        ? '${song.kind}:file:${song.url}'
+        : '';
+    if (recordings.contains(song) ||
+        (file.isNotEmpty && files.contains(file))) {
+      continue;
+    }
+    recordings.add(song);
+    if (file.isNotEmpty) files.add(file);
+    result.add(song);
+  }
+  return result;
+}
+
 /// A bad cross-catalogue match makes every recommendation in that radio wrong.
 Song? matchMusicSeed(Song seed, List<Song> candidates) {
   final title = recordingTitle(seed.title);
@@ -149,6 +174,7 @@ class MusicTaste {
   MusicTaste(
     Iterable<MusicPreference> history, {
     this.language = 'Any',
+    this.selectedLanguages = const {},
     DateTime? now,
   }) : preferences = history
            .where((p) => !p.song.isVideo && !p.song.isLongform)
@@ -173,6 +199,7 @@ class MusicTaste {
 
   final List<MusicPreference> preferences;
   final String language;
+  final Set<String> selectedLanguages;
   final DateTime now;
   final Map<String, double> artists = {}, languages = {}, genres = {};
   final _history = MusicRecordingIndex<MusicPreference>((p) => p.song);
@@ -249,7 +276,9 @@ class MusicTaste {
                 ..sort((a, b) => b.value.compareTo(a.value)))
               .firstOrNull
               ?.key;
-    if (preferred != null && preferred.isNotEmpty) {
+    if (selectedLanguages.isNotEmpty) {
+      queries.addAll(selectedLanguages.map((l) => '$l songs'));
+    } else if (preferred != null && preferred.isNotEmpty) {
       queries.add('$preferred songs');
     }
     return queries;

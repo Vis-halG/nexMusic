@@ -38,8 +38,10 @@ import 'music_transfer.dart';
 import 'music_lyrics.dart';
 import 'music_device.dart';
 import 'music_artists.dart';
+import 'song_languages.dart';
 
 part 'listening_controller.dart';
+part 'stream_upload_controller.dart';
 
 /// File types accepted for public uploads: the audio and video formats
 /// Cloudinary stores. Phones play most of them directly; the rest are
@@ -479,6 +481,11 @@ class MusicController extends ChangeNotifier {
   late MusicDownloads downloads;
   late ListeningPlayer playback;
   bool _playbackReady = false;
+  final List<StreamUploadJob> streamUploadJobs = [];
+  bool _streamQueueScheduled = false;
+  Timer? _uploadsDismiss;
+  Set<String> _languageSelection = const {};
+  Future<void> _languageUpdate = Future.value();
   late final MusicLyricsService lyricsService = MusicLyricsService(_prefs);
   Future<void> _accountSwitch = Future.value();
   String _accountUid = 'guest';
@@ -988,9 +995,29 @@ class MusicController extends ChangeNotifier {
     }
   }
 
-  List<Song> songsIn(String? categoryId) => categoryId == null
-      ? songs
-      : songs.where((song) => song.inCategory(categoryId)).toList();
+  bool allowsSong(Song song) => personal.settings.allowsLanguage(song);
+  List<Song> visibleSongs(Iterable<Song> tracks) =>
+      tracks.where(allowsSong).toList();
+  List<Song> songsIn(String? categoryId) => uniqueMusicTracks(
+    visibleSongs(
+      categoryId == null
+          ? songs
+          : songs.where((song) => song.inCategory(categoryId)),
+    ),
+  );
+  List<String> get availableSongLanguages => {
+    ...songLanguages,
+    ...personal.settings.selectedLanguages,
+    for (final song in [
+      ...songs,
+      ...providerSongs,
+      ...personal.localTracks.values,
+      ...personal.offlineTracks.values,
+      ...library.entries.map((e) => e.song),
+      for (final playlist in personal.playlists) ...playlist.tracks,
+    ])
+      normalizeSongLanguage(song.language),
+  }.where((s) => s.isNotEmpty).toList()..sort();
 
   bool ownsSong(Song song) => uid != null && song.ownerUid == uid;
   bool ownsCategory(MusicCategory category) =>
@@ -1012,6 +1039,7 @@ class MusicController extends ChangeNotifier {
     return found.values
         .where(
           (s) =>
+              allowsSong(s) &&
               offlineSongs.containsKey(s.id) &&
               File(offlineSongs[s.id]!).existsSync(),
         )
@@ -1093,10 +1121,30 @@ class MusicController extends ChangeNotifier {
 
   @override
   void notifyListeners() {
+    _queuePreparedStreamUploads();
     super.notifyListeners();
+    _syncTransferService();
     _showUploadProgress();
     _scheduleWidgetUpdate();
     if (_playbackReady) _updateNotificationControls();
+  }
+
+  void _syncTransferService() {
+    if (phone == null || !_playbackReady) return;
+    unawaited(phone!.setTransferActive('uploads', uploading && !uploadsPaused));
+    unawaited(
+      phone!.setTransferActive(
+        'downloads',
+        !downloads.paused &&
+            downloads.jobs.values.any(
+              (job) => {
+                MusicDownloadStatus.downloading,
+                MusicDownloadStatus.queued,
+                MusicDownloadStatus.paused,
+              }.contains(job.status),
+            ),
+      ),
+    );
   }
 
   // ── Widgets and notifications ────────────────────────────────────────────
@@ -1159,7 +1207,9 @@ class MusicController extends ChangeNotifier {
           : queue[(index + 1) % queue.length].title;
       final data = jsonEncode({
         'darkMode': darkMode,
-        'latest': [for (final item in songs.take(3)) row(item)],
+        'latest': [
+          for (final item in songs.where(allowsSong).take(3)) row(item),
+        ],
         'recent': [for (final item in recentSongs.take(3)) row(item)],
         'liked': [for (final item in likedSongs.take(3)) row(item)],
         'now': song == null
@@ -1213,6 +1263,15 @@ class MusicController extends ChangeNotifier {
     ];
     final failed = uploadsFailed;
     final cancelled = uploadsCancelled;
+    if (failed == 0) {
+      _uploadsDismiss?.cancel();
+      final finished = uploads;
+      _uploadsDismiss = Timer(const Duration(seconds: 2), () {
+        if (!_uploadsDisposed && identical(finished, uploads) && !uploading) {
+          clearUploads();
+        }
+      });
+    }
     final title = switch ((done.length, failed)) {
       _ when cancelled > 0 && done.isEmpty => 'Uploads cancelled',
       _ when cancelled > 0 => '${done.length} uploaded, the rest cancelled',
@@ -1311,6 +1370,12 @@ class MusicController extends ChangeNotifier {
     bool restrictToQueue = false,
   }) async {
     if (song.isVideo) return;
+    if (!allowsSong(song)) {
+      announce(
+        'Choose ${normalizeSongLanguage(song.language)} in Profile → Song languages to play this song.',
+      );
+      return;
+    }
     if (isStreamingLink(song.url)) {
       announce(
         'Streaming links are not supported. Choose a plain audio or video file.',
@@ -1339,7 +1404,7 @@ class MusicController extends ChangeNotifier {
         (from == null && current?.id == song.id ? _randomScope : null);
     await playback.play(
       song,
-      from: from,
+      from: from == null ? null : visibleSongs(from),
       initialPosition:
           initialPosition ??
           (song.isLongform
@@ -1483,32 +1548,36 @@ class MusicController extends ChangeNotifier {
       for (final row in listening.values)
         for (final song in readSongs([row['song']])) song.id: song,
     };
-    return MusicTaste([
-      for (final song in known.values)
-        MusicPreference(
-          song,
-          liked:
-              entries[song.id]?.liked == true ||
-              liked.contains(song.id) ||
-              personal.activity[song.id]?['liked'] == true,
-          plays: math.max(
-            entries[song.id]?.plays ?? 0,
-            entries[song.id]?.wasPlayed == true ? 1 : 0,
+    return MusicTaste(
+      [
+        for (final song in known.values)
+          MusicPreference(
+            song,
+            liked:
+                entries[song.id]?.liked == true ||
+                liked.contains(song.id) ||
+                personal.activity[song.id]?['liked'] == true,
+            plays: math.max(
+              entries[song.id]?.plays ?? 0,
+              entries[song.id]?.wasPlayed == true ? 1 : 0,
+            ),
+            lastPlayed: math.max(
+              entries[song.id]?.lastPlayed ?? 0,
+              (personal.activity[song.id]?['lastPlayed'] as num? ??
+                      (entries[song.id]?.lastPlayed == 0
+                          ? legacyRecent[song.id]
+                          : 0) ??
+                      0)
+                  .toInt(),
+            ),
+            listenedMs: (listening[song.id]?['ms'] as num? ?? 0).toInt(),
+            completed: (listening[song.id]?['completed'] as num? ?? 0).toInt(),
+            skips: (listening[song.id]?['skips'] as num? ?? 0).toInt(),
           ),
-          lastPlayed: math.max(
-            entries[song.id]?.lastPlayed ?? 0,
-            (personal.activity[song.id]?['lastPlayed'] as num? ??
-                    (entries[song.id]?.lastPlayed == 0
-                        ? legacyRecent[song.id]
-                        : 0) ??
-                    0)
-                .toInt(),
-          ),
-          listenedMs: (listening[song.id]?['ms'] as num? ?? 0).toInt(),
-          completed: (listening[song.id]?['completed'] as num? ?? 0).toInt(),
-          skips: (listening[song.id]?['skips'] as num? ?? 0).toInt(),
-        ),
-    ], language: personal.settings.language);
+      ],
+      language: personal.settings.language,
+      selectedLanguages: personal.settings.selectedLanguages,
+    );
   }
 
   Future<List<Song>> fetchPersonalizedStream({
@@ -1550,7 +1619,10 @@ class MusicController extends ChangeNotifier {
     final familiar = seeds
         .where((s) => s.isProvider && s.id != current?.id)
         .toList();
-    final picks = mergeMusicResults([tracks, familiar], limit: limit);
+    final picks = mergeMusicResults([
+      tracks.where((s) => s.isProvider && account.accepts(s)).toList(),
+      familiar.where(account.accepts).toList(),
+    ], limit: limit);
     library.rememberSongs(picks);
     return picks;
   }
@@ -1585,7 +1657,9 @@ class MusicController extends ChangeNotifier {
       ...personal.localTracks.values,
       ...personal.offlineTracks.values,
     ]);
-    return library.collection(collection).map((item) => item.song).toList();
+    return visibleSongs(
+      library.collection(collection).map((item) => item.song),
+    );
   }
 
   List<Song> communitySongs(MediaCollection collection) => community
@@ -2060,6 +2134,12 @@ class MusicController extends ChangeNotifier {
     List<String> extraCategoryIds = const [],
   }) async {
     if (items.isEmpty) return;
+    if (items.any((item) => uploadKindFor(item.name) != 'audio')) {
+      announce(
+        'Library uploads support audio only. Videos cannot be uploaded.',
+      );
+      return;
+    }
     if (categoryById(categoryId) == null) {
       notice = 'Choose a category.';
       notifyListeners();
@@ -2241,8 +2321,8 @@ class MusicController extends ChangeNotifier {
         throw const _UploadFailure('Sign in with Google again.');
       }
       final kind = uploadKindFor(item.name);
-      if (kind == null) {
-        throw const _UploadFailure('This file type is not supported.');
+      if (kind == null || kind != 'audio') {
+        throw const _UploadFailure('Library uploads support audio only.');
       }
       if (item.sizeBytes >= maxUploadBytes) {
         throw const _UploadFailure('Files over 100 MB cannot be uploaded.');
@@ -3482,6 +3562,14 @@ class MusicController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _uploadsDismiss?.cancel();
+    for (final job in List.of(streamUploadJobs)) {
+      job.removeListener(_streamUploadChanged);
+      job.cancel();
+    }
+    streamUploadJobs.clear();
+    unawaited(phone?.setTransferActive('uploads', false));
+    unawaited(phone?.setTransferActive('downloads', false));
     _playbackReady = false;
     unawaited(_accessSubscription?.cancel());
     _presenceTimer?.cancel();
@@ -3507,7 +3595,7 @@ class MusicController extends ChangeNotifier {
       ..removeListener(_playerChanged)
       ..dispose();
     personal
-      ..removeListener(notifyListeners)
+      ..removeListener(_personalChanged)
       ..dispose();
     social
       ?..removeListener(notifyListeners)

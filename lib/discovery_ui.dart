@@ -116,8 +116,9 @@ class _MusicDiscoveryScreenState extends State<MusicDiscoveryScreen> {
   @override
   Widget build(BuildContext context) {
     final music = context.watch<MusicController>();
+    final visible = music.visibleSongs(tracks);
     return _SongSelectionScaffold(
-      songs: tracks,
+      songs: visible,
       appBar: AppBar(
         title: Text(widget.prompt ? 'Create a mix' : 'Discover music'),
       ),
@@ -205,13 +206,14 @@ class _MusicDiscoveryScreenState extends State<MusicDiscoveryScreen> {
                       icon: const Icon(Icons.auto_awesome),
                       label: const Text('Find tracks'),
                     ),
-                    if (tracks.isNotEmpty)
+                    if (visible.isNotEmpty)
                       OutlinedButton.icon(
-                        onPressed: () => music.play(tracks.first, from: tracks),
+                        onPressed: () =>
+                            music.play(visible.first, from: visible),
                         icon: const Icon(Icons.play_arrow),
                         label: const Text('Play'),
                       ),
-                    if (tracks.isNotEmpty)
+                    if (visible.isNotEmpty)
                       OutlinedButton.icon(
                         onPressed: () => _featureTask(context, () async {
                           final p = music.personal.createPlaylist(
@@ -219,7 +221,7 @@ class _MusicDiscoveryScreenState extends State<MusicDiscoveryScreen> {
                               0,
                               (mixName ?? 'My mix').length.clamp(0, 80),
                             ),
-                            tracks: tracks,
+                            tracks: visible,
                           );
                           _push(context, PlaylistScreen(id: p.id));
                         }),
@@ -237,9 +239,9 @@ class _MusicDiscoveryScreenState extends State<MusicDiscoveryScreen> {
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.only(bottom: 80),
-              itemCount: tracks.length,
+              itemCount: visible.length,
               itemBuilder: (_, i) =>
-                  _discoveryTile(context, tracks[i], tracks, explain: true),
+                  _discoveryTile(context, visible[i], visible, explain: true),
             ),
           ),
         ],
@@ -327,6 +329,7 @@ Widget _discoveryTile(
 Future<void> _previewSong(BuildContext context, Song song) =>
     _featureTask(context, () async {
       final music = context.read<MusicController>();
+      if (!music.allowsSong(song)) return;
       final wasPlaying = music.playing;
       final restoreSong = music.current;
       final restorePosition = music.position;
@@ -376,12 +379,41 @@ class ArtistAlbumScreen extends StatefulWidget {
 
 class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
   List<Song> tracks = [];
-  bool busy = true;
+  final _seenProviderIds = <String>{};
+  bool busy = false, hasMore = true;
+  int page = 0, request = 0;
   String? error;
-  Future<void> load() async {
+
+  Future<List<Song>> _artistPage(
+    MusicController music,
+    Song seed,
+    int nextPage,
+  ) async {
+    final result = await music.discovery.browse(
+      query: widget.album ? '${seed.album} ${seed.artist}' : seed.artist,
+      page: nextPage,
+      limit: 50,
+    );
+    if (result.songs.isEmpty && result.unavailable.isNotEmpty) {
+      throw StateError('The music provider is temporarily unavailable.');
+    }
+    return result.songs;
+  }
+
+  Future<void> load({bool more = false}) async {
+    if (busy || (more && !hasMore)) return;
+    final generation = ++request;
     final music = context.read<MusicController>(), seed = widget.song;
+    final account = music.personal;
+    final nextPage = more ? page + 1 : 1;
+    setState(() {
+      busy = true;
+      error = null;
+    });
     try {
-      final local = widget.album
+      final local = more
+          ? <Song>[]
+          : widget.album
           ? music.allMusic
                 .where(
                   (s) =>
@@ -400,32 +432,37 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
                 seed.albumId.isNotEmpty &&
                 seed.providerId == 'jiosaavn'
           ? await music.catalog.album(seed)
-          : (await music.discovery.browse(
-              query: widget.album
-                  ? '${seed.album} ${seed.artist}'
-                  : seed.artist,
-            )).songs;
-      final matching = online.where(
+          : await _artistPage(music, seed, nextPage);
+      if (!mounted || generation != request || account != music.personal) {
+        return;
+      }
+      if (!more) _seenProviderIds.clear();
+      final fresh = online
+          .where((s) => !_seenProviderIds.contains(s.id))
+          .toList();
+      _seenProviderIds.addAll(online.map((s) => s.id));
+      final artist = normalizeMusicText(seed.artist);
+      final matching = fresh.where(
         (s) =>
             widget.album ||
-            songArtistNames(
-              s,
-            ).any((a) => a.toLowerCase() == seed.artist.trim().toLowerCase()),
+            songArtistNames(s).any((a) => normalizeMusicText(a) == artist),
       );
-      final results = {
-        for (final s in [...local, ...matching]) s.id: s,
-      }.values.toList();
+      final results = mergeMusicResults([
+        if (more) tracks,
+        local,
+        matching.toList(),
+      ]);
       music.library.rememberSongs(results);
-      if (mounted) {
+      setState(() {
+        tracks = results;
+        page = nextPage;
+        busy = false;
+        hasMore = !widget.album && !seed.isLocal && fresh.isNotEmpty;
+      });
+    } catch (_) {
+      if (mounted && generation == request) {
         setState(() {
-          tracks = results;
-          busy = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          error = 'Could not load tracks. Try again.';
+          error = 'Could not load more tracks. Tap to retry.';
           busy = false;
         });
       }
@@ -439,23 +476,71 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => _SongSelectionScaffold(
-    songs: tracks,
-    appBar: AppBar(
-      title: Text(widget.album ? widget.song.album : widget.song.artist),
-    ),
-    body: Column(
-      children: [
-        if (busy) const LinearProgressIndicator(),
-        if (error != null) TextButton(onPressed: load, child: Text(error!)),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.only(bottom: 80),
-            itemCount: tracks.length,
-            itemBuilder: (_, i) => _discoveryTile(context, tracks[i], tracks),
+  void dispose() {
+    request++;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final visible = context.watch<MusicController>().visibleSongs(tracks);
+    return _SongSelectionScaffold(
+      songs: visible,
+      appBar: AppBar(
+        title: Text(widget.album ? widget.song.album : widget.song.artist),
+      ),
+      body: Column(
+        children: [
+          if (busy) const LinearProgressIndicator(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '${visible.length} songs${hasMore ? ' · more available' : ''}',
+                style: TextStyle(color: _muted(context), fontSize: 12),
+              ),
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+          Expanded(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (notification) {
+                if (notification.depth == 0 &&
+                    notification.metrics.axis == Axis.vertical &&
+                    notification.metrics.pixels > 0 &&
+                    notification.metrics.extentAfter < 450 &&
+                    !busy &&
+                    hasMore &&
+                    error == null) {
+                  load(more: true);
+                }
+                return false;
+              },
+              child: ListView.builder(
+                padding: const EdgeInsets.only(bottom: 80),
+                itemCount: visible.length + 1,
+                itemBuilder: (_, i) {
+                  if (i < visible.length) {
+                    return _discoveryTile(context, visible[i], visible);
+                  }
+                  if (error != null) {
+                    return TextButton(
+                      onPressed: () => load(more: page > 0),
+                      child: Text(error!),
+                    );
+                  }
+                  if (!hasMore) return const SizedBox.shrink();
+                  return TextButton(
+                    onPressed: busy ? null : () => load(more: true),
+                    child: Text(busy ? 'Loading songs…' : 'Load more songs'),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+      bottomNavigationBar: const MiniPlayer(),
+    );
+  }
 }

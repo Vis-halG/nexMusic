@@ -20,6 +20,7 @@ class ListeningPlayer extends ChangeNotifier {
     this.onQueueSaved,
     this.onQueueEnd,
     this.onAudioSession,
+    this.canPlay,
   }) {
     _attach();
     _clock = Timer.periodic(const Duration(milliseconds: 500), (_) => _tick());
@@ -36,6 +37,8 @@ class ListeningPlayer extends ChangeNotifier {
   final void Function()? onQueueSaved;
   final Future<void> Function()? onQueueEnd;
   final void Function(int)? onAudioSession;
+  final bool Function(Song)? canPlay;
+  bool _allowed(Song song) => canPlay?.call(song) ?? true;
   final ListeningQueue queue = ListeningQueue();
   final ValueNotifier<Duration> position = ValueNotifier(Duration.zero);
   Duration restoredPosition = Duration.zero;
@@ -62,6 +65,8 @@ class ListeningPlayer extends ChangeNotifier {
   AudioPlayer? _standby;
   String? _preparedId;
   final _sources = <String, ({DateTime at, AudioSource source})>{};
+  final _resolving = <String, Future<AudioSource>>{};
+  int _sourceEpoch = 0;
   bool get playing => _player.playing;
   bool get loading =>
       _player.processingState == ProcessingState.loading ||
@@ -111,6 +116,10 @@ class ListeningPlayer extends ChangeNotifier {
         if (_disposed) return;
         final tag = _player.sequenceState.currentSource?.tag;
         if (tag is Song && tag.id != queue.currentId) {
+          if (!_allowed(tag)) {
+            unawaited(applyFilter(stopCurrent: true));
+            return;
+          }
           if (sleepAfterTrack) {
             clearSleep();
             unawaited(pause());
@@ -146,13 +155,40 @@ class ListeningPlayer extends ChangeNotifier {
           ? AudioSource.uri(source.uri, headers: source.headers, tag: song)
           : source;
     }
-    final source = await resolve(song);
-    _sources[song.id] = (at: DateTime.now(), source: source);
-    if (_sources.length > 10) _sources.remove(_sources.keys.first);
-    return source;
+    final epoch = _sourceEpoch;
+    final pending = _resolving.putIfAbsent(song.id, () => resolve(song));
+    try {
+      final source = await pending;
+      if (!_disposed && epoch == _sourceEpoch) {
+        _sources[song.id] = (at: DateTime.now(), source: source);
+        if (_sources.length > 10) _sources.remove(_sources.keys.first);
+      }
+      return source is UriAudioSource
+          ? AudioSource.uri(source.uri, headers: source.headers, tag: song)
+          : source;
+    } finally {
+      if (identical(_resolving[song.id], pending)) _resolving.remove(song.id);
+    }
+  }
+
+  /// Resolve both directions before a swipe; the native player also buffers
+  /// the next source for gapless playback. Sharing pending work avoids a
+  /// second provider request when the user swipes during preparation.
+  Future<void> warmAdjacent() async {
+    if (_disposed) return;
+    await Future.wait([
+      for (final song in [
+        queue.peekNext(),
+        queue.peekPrevious(),
+      ].whereType<Song>())
+        if (_allowed(song))
+          _source(song).then<void>((_) {}, onError: (Object _) {}),
+    ]);
   }
 
   void invalidateSources() {
+    ++_sourceEpoch;
+    _resolving.clear();
     _sources.clear();
     _preparedId = null;
   }
@@ -163,7 +199,8 @@ class ListeningPlayer extends ChangeNotifier {
     Duration initialPosition = Duration.zero,
     bool recordHistory = true,
   }) async {
-    if (song.isVideo || _disposed) return;
+    if (song.isVideo || _disposed || !_allowed(song)) return;
+    from = from?.where(_allowed).toList();
     _flush(
       skipped:
           queue.currentId != null &&
@@ -171,8 +208,17 @@ class ListeningPlayer extends ChangeNotifier {
           position.value.inSeconds < 30,
     );
     final generation = ++_generation;
+    final preparedIndex =
+        from == null && _player.processingState == ProcessingState.ready
+        ? _player.audioSources.indexWhere(
+            (source) =>
+                source is UriAudioSource &&
+                source.tag is Song &&
+                (source.tag as Song).id == song.id,
+          )
+        : -1;
     _fading = false;
-    await _player.pause();
+    if (preparedIndex < 0) await _player.pause();
     await _standby?.dispose();
     if (generation != _generation || _disposed) return;
     _standby = null;
@@ -185,19 +231,27 @@ class ListeningPlayer extends ChangeNotifier {
     onQueueSaved?.call();
     notifyListeners();
     try {
-      final source = await _source(song);
-      if (generation != _generation || _disposed) return;
       await _player.setVolume(_volume * _sleepGain);
       await _player.setSpeed(song.isLongform ? speed : 1);
-      await _player.setAudioSources([source], initialPosition: initialPosition);
+      if (preparedIndex >= 0) {
+        await _player.seek(initialPosition, index: preparedIndex);
+      } else {
+        final source = await _source(song);
+        if (generation != _generation || _disposed || !_allowed(song)) return;
+        await _player.setAudioSources([
+          source,
+        ], initialPosition: initialPosition);
+      }
       if (generation != _generation || _disposed) return;
       await _player.setLoopMode(
         queue.repeat == MusicRepeat.one ? LoopMode.one : LoopMode.off,
       );
+      if (generation != _generation || _disposed || !_allowed(song)) return;
       onTrack(song);
       onQueueSaved?.call();
       unawaited(_player.play());
       unawaited(_prepareNext());
+      unawaited(warmAdjacent());
     } on PlayerInterruptedException {
       /* Another track won the request. */
     } catch (e) {
@@ -217,6 +271,7 @@ class ListeningPlayer extends ChangeNotifier {
         sleepAfterTrack ||
         queue.repeat == MusicRepeat.one ||
         next == null ||
+        !_allowed(next) ||
         next.id == _preparedId ||
         next.isLongform ||
         queue.current?.isLongform == true) {
@@ -228,6 +283,7 @@ class ListeningPlayer extends ChangeNotifier {
       final source = await _source(next);
       if (generation != _generation ||
           _disposed ||
+          !_allowed(next) ||
           queue.peekNext(completed: true)?.id != next.id) {
         return;
       }
@@ -244,7 +300,17 @@ class ListeningPlayer extends ChangeNotifier {
         _preparedId = next.id;
       } else if (settings().gapless) {
         // Native playlist transitions happen without waiting on Dart/network.
-        await _player.addAudioSource(source);
+        final nextIndex = (_player.currentIndex ?? 0) + 1;
+        final existing = _player.audioSources.elementAtOrNull(nextIndex);
+        if (existing is! UriAudioSource ||
+            existing.tag is! Song ||
+            (existing.tag as Song).id != next.id) {
+          while (_player.audioSources.length > nextIndex) {
+            await _player.removeAudioSourceAt(_player.audioSources.length - 1);
+          }
+          if (generation != _generation || _disposed || !_allowed(next)) return;
+          await _player.addAudioSource(source);
+        }
         _preparedId = next.id;
       }
     } catch (_) {
@@ -271,10 +337,29 @@ class ListeningPlayer extends ChangeNotifier {
     unawaited(_prepareNext());
   }
 
+  /// Invalidates native preloads and crossfades when language choices change.
+  /// An excluded current song stops immediately; the next start is explicit.
+  Future<void> applyFilter({bool stopCurrent = false}) async {
+    if (_disposed) return;
+    final current = queue.current;
+    final excluded = stopCurrent || (current != null && !_allowed(current));
+    queue.retainWhere(_allowed);
+    if (excluded) {
+      // Do not display a replacement as if its audio were already loaded.
+      queue.currentId = null;
+      await stop();
+      if (_disposed) return;
+      position.value = Duration.zero;
+      restoredPosition = Duration.zero;
+    }
+    await queueChanged();
+  }
+
   Future<void> next({bool completed = false}) async {
     if (_advancing || _disposed) return;
     _advancing = true;
     try {
+      queue.retainWhere(_allowed);
       if (queue.peekNext(completed: completed) == null && settings().autoplay) {
         try {
           await onQueueEnd?.call();
@@ -297,6 +382,7 @@ class ListeningPlayer extends ChangeNotifier {
 
   Future<void> previous({bool restartCurrent = true}) async {
     if (_disposed || _advancing) return;
+    queue.retainWhere(_allowed);
     if (restartCurrent && position.value.inSeconds > 4) {
       await seek(Duration.zero);
       return;
@@ -317,6 +403,10 @@ class ListeningPlayer extends ChangeNotifier {
   Future<void> resume() async {
     if (_player.playing || _disposed) return;
     if (queue.current == null) return;
+    if (!_allowed(queue.current!)) {
+      await applyFilter();
+      return;
+    }
     if (_player.processingState == ProcessingState.idle ||
         _player.processingState == ProcessingState.completed) {
       await play(
@@ -444,6 +534,7 @@ class ListeningPlayer extends ChangeNotifier {
     final incoming = _standby, next = queue.peekNext(completed: true);
     if (incoming == null ||
         next == null ||
+        !_allowed(next) ||
         incoming.processingState != ProcessingState.ready) {
       return;
     }

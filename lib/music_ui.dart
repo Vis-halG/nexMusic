@@ -41,10 +41,10 @@ import 'music_social.dart';
 import 'song_selection.dart';
 import 'music_sharing.dart';
 import 'phone_services.dart';
+import 'container_route.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
 
 part 'listening_ui.dart';
 part 'admin_ui.dart';
@@ -58,6 +58,10 @@ part 'song_selection_ui.dart';
 part 'advance_ui.dart';
 part 'mini_player.dart';
 part 'notification_player_ui.dart';
+part 'song_languages_ui.dart';
+part 'upload_status_ui.dart';
+
+final musicNavigatorKey = GlobalKey<NavigatorState>();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -99,7 +103,12 @@ String _mediaSubtitle(MusicController music, SavedMedia item) {
 }
 
 void _push(BuildContext context, Widget screen) {
-  Navigator.of(context).push<void>(MaterialPageRoute(builder: (_) => screen));
+  Navigator.of(context).push<void>(
+    NexPageRoute(
+      builder: (_) => screen,
+      reducedMotion: MediaQuery.disableAnimationsOf(context),
+    ),
+  );
 }
 
 Future<void> _openSong(
@@ -113,6 +122,7 @@ Future<void> _openSong(
     return;
   }
   final music = context.read<MusicController>();
+  if (!music.allowsSong(song)) return;
   if (song.isVideo) {
     try {
       final url = await music.resolvedPlayableUrl(song);
@@ -144,7 +154,8 @@ Future<void> _openSongVideo(BuildContext context, Song song) async {
     final url = await music.resolvedPlayableUrl(videoSong);
     if (!context.mounted) return;
     await Navigator.of(context).push<void>(
-      MaterialPageRoute(
+      NexPageRoute(
+        reducedMotion: MediaQuery.disableAnimationsOf(context),
         builder: (_) => VideoScreen(
           song: videoSong.copyWith(url: url),
           httpHeaders: music.playbackHeadersFor(videoSong),
@@ -163,10 +174,18 @@ Future<void> _openSongVideo(BuildContext context, Song song) async {
   }
 }
 
-void _openPlayer(BuildContext context) {
-  Navigator.of(context).push<void>(
-    MaterialPageRoute(
-      fullscreenDialog: true,
+void _openPlayer(BuildContext context, {Rect? origin, Widget? preview}) {
+  final navigator = Navigator.of(context);
+  final viewport = navigator.context.findRenderObject();
+  if (origin != null && viewport is RenderBox) {
+    origin = origin.shift(-viewport.localToGlobal(Offset.zero));
+  }
+  navigator.push<void>(
+    NexPageRoute(
+      origin: origin,
+      preview: preview,
+      surfaceColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+      reducedMotion: MediaQuery.disableAnimationsOf(context),
       builder: (_) => const NowPlayingScreen(),
     ),
   );
@@ -647,7 +666,8 @@ bool get _canTrim => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 Future<bool> _trimUpload(BuildContext context, UploadItem item) async {
   final result = await Navigator.of(context)
       .push<({String path, Duration start, Duration end})>(
-        MaterialPageRoute(
+        NexPageRoute(
+          reducedMotion: MediaQuery.disableAnimationsOf(context),
           builder: (_) => TrimScreen(
             source: item.original?.path ?? item.path,
             title: item.title,
@@ -2046,7 +2066,8 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
   @override
   Widget build(BuildContext context) {
     final music = context.watch<MusicController>();
-    final allSongs = music.songs;
+    final allSongs = music.visibleSongs(music.songs);
+    final onlineSongs = music.visibleSongs(music.providerSongs);
 
     return CustomScrollView(
       slivers: [
@@ -2115,33 +2136,6 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
             ),
           ),
         ),
-
-        // Upload / conversion progress
-        if (music.uploads.isNotEmpty)
-          SliverToBoxAdapter(
-            child: InkWell(
-              onTap: () => _push(context, const UploadScreen()),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 6, 20, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      music.uploading
-                          ? 'Uploading ${music.uploadsFinished} of ${music.uploads.length}'
-                          : 'Uploads finished · tap to review',
-                      style: TextStyle(color: _muted(context), fontSize: 12),
-                    ),
-                    const SizedBox(height: 6),
-                    LinearProgressIndicator(
-                      value: music.uploadFraction,
-                      minHeight: 3,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
 
         // IF A SPECIFIC CATEGORY IS SELECTED: Show filtered tracklist
         if (_selectedCategory != null) ...[
@@ -2324,16 +2318,16 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
               ),
 
           // Recommendations from both online music catalogues.
-          if (music.providerSongs.isNotEmpty)
+          if (onlineSongs.isNotEmpty)
             SliverToBoxAdapter(
               child: _SpotifySection(
                 title: 'Music Highlights',
                 subtitle: 'JioSaavn + YouTube Music',
-                songs: music.providerSongs,
+                songs: onlineSongs,
               ),
             ),
 
-          if (allSongs.isEmpty && music.providerSongs.isEmpty)
+          if (allSongs.isEmpty && onlineSongs.isEmpty)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 48),
@@ -2456,6 +2450,7 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
   MusicTaste? _taste;
   Set<String> _excluded = {};
   String _feedKey = '';
+  String? _languageKey;
   Timer? _debounce;
   int _request = 0;
   int _page = 1;
@@ -2534,7 +2529,8 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
     final account = music.personal;
     final query = _query;
     final personalized = _personalized;
-    final feedKey = '$personalized:$query:$_category';
+    final languages = account.settings.selectedLanguages.toList()..sort();
+    final feedKey = '$personalized:$query:$_category:${languages.join(',')}';
     final changedFeed = _feedKey != feedKey;
     final page = more ? _page + 1 : 1;
     if (refresh) music.discovery.clearCache();
@@ -2660,6 +2656,17 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
     context.select<MusicController, String>(
       (m) => m.personal.settings.language,
     );
+    final selectedLanguages = context.select<MusicController, Set<String>>(
+      (m) => m.personal.settings.selectedLanguages,
+    );
+    final languages = selectedLanguages.toList()..sort();
+    final languageKey = jsonEncode(languages);
+    if (_languageKey != null && _languageKey != languageKey) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load();
+      });
+    }
+    _languageKey = languageKey;
     context.select<MusicController, Set<String>>(
       (m) => Set.of(m.personal.hiddenSongs),
     );
@@ -2668,7 +2675,9 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
     );
     final scheme = Theme.of(context).colorScheme;
     final showHome = _search.text.trim().isEmpty && _category == 'For you';
-    final picks = _quickPicks.where(music.personal.accepts).toList();
+    final picks = _quickPicks
+        .where((s) => s.isProvider && music.personal.accepts(s))
+        .toList();
     final similar = _similar.where(music.personal.accepts).toList();
     final tracks =
         (_category == 'Quick Picks' && _search.text.trim().isEmpty
@@ -3258,7 +3267,8 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
                 s.artist.toLowerCase().contains(query) ||
                 music.categoryName(s.categoryId).toLowerCase().contains(query);
           }).toList();
-    final selectableResults = [...searchResults, ...music.providerSongs];
+    final onlineSongs = music.visibleSongs(music.providerSongs);
+    final selectableResults = [...searchResults, ...onlineSongs];
 
     return Column(
       children: [
@@ -3298,7 +3308,7 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
         ),
         Expanded(
           child: query.isNotEmpty
-              ? (searchResults.isEmpty && music.providerSongs.isEmpty
+              ? (searchResults.isEmpty && onlineSongs.isEmpty
                     ? Center(
                         child: Text(
                           'No results for "$query"',
@@ -3326,7 +3336,7 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
                                 selectionSongs: selectableResults,
                               ),
                           ],
-                          if (music.providerSongs.isNotEmpty) ...[
+                          if (onlineSongs.isNotEmpty) ...[
                             const Padding(
                               padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
                               child: Text(
@@ -3337,10 +3347,10 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
                                 ),
                               ),
                             ),
-                            for (final song in music.providerSongs)
+                            for (final song in onlineSongs)
                               SongTile(
                                 song: song,
-                                queue: music.providerSongs,
+                                queue: onlineSongs,
                                 selectionSongs: selectableResults,
                               ),
                           ],
@@ -3511,7 +3521,7 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
     if (_chip.contains(':') && category == null && playlist == null) {
       _chip = 'all';
     }
-    final source = switch (_chip) {
+    final source = music.visibleSongs(switch (_chip) {
       'liked' => music.communitySongs(MediaCollection.likedSongs),
       'downloads' => music.downloadedSongs,
       _ when category != null => music.songsIn(category.id),
@@ -3526,7 +3536,7 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
         ])
           s.id: s,
       }.values.toList(),
-    };
+    });
     final query = _search.text.trim().toLowerCase();
     final tracks = _tracks = query.isEmpty
         ? source
@@ -3538,7 +3548,7 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
               )
               .toList();
     final picks = _chip == 'all' && query.isEmpty
-        ? music.recentSongs.where((s) => !s.isVideo).take(12).toList()
+        ? music.libraryQuickPicks
         : const <Song>[];
     final title = switch (_chip) {
       'liked' => 'Liked Songs',
@@ -3665,6 +3675,11 @@ class SongTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!context.select<MusicController, bool>(
+      (music) => music.allowsSong(song),
+    )) {
+      return const SizedBox.shrink();
+    }
     final selection = context.watch<SongSelection?>();
     final tile = context
         .select<
@@ -4091,11 +4106,11 @@ class _UploadScreenState extends State<UploadScreen> {
   List<String> _categoryIds = [];
   String? get _categoryId => _categoryIds.firstOrNull;
   SharedAudioJob? _job;
-  SongFilePreparation? _streamPreparation;
-  bool _streamBusy = false, _streamSubmitted = false;
-  double? _streamProgress;
-  String? _streamError;
-  int _streamRequest = 0;
+  StreamUploadJob? _streamJob;
+  bool _streamSubmitted = false;
+  bool get _streamBusy => _streamJob?.busy ?? false;
+  double? get _streamProgress => _streamJob?.progress;
+  String? get _streamError => _streamJob?.error;
   late final Object _account;
 
   @override
@@ -4129,115 +4144,32 @@ class _UploadScreenState extends State<UploadScreen> {
   Future<void> _prepareStreamAudio() async {
     final song = widget.streamSong;
     if (song == null || _streamBusy) return;
-    final request = ++_streamRequest;
-    setState(() {
-      _streamBusy = true;
-      _streamError = null;
-      _streamProgress = null;
-    });
-    PreparedSongFiles? prepared;
-    File? copy;
-    var retained = false;
-    try {
-      if (_music.uid == null) {
-        throw StateError('Sign in with Google to upload songs.');
-      }
-      if (_account != _music.personal) {
-        throw StateError('Your account changed. Open the song again.');
-      }
-      final preparation = _music.createAudioFilePreparation(
-        maxBytes: math.min(
-          maxUploadBytes - 1,
-          _music.personal.settings.storageBudgetMb * 1024 * 1024,
-        ),
-        onProgress: (_, _, _, fraction) {
-          if (mounted && request == _streamRequest) {
-            setState(() => _streamProgress = fraction);
-          }
-        },
-      );
-      _streamPreparation = preparation;
-      prepared = await preparation.prepare([song]);
-      if (!mounted ||
-          request != _streamRequest ||
-          _account != _music.personal) {
-        return;
-      }
-      final directory = await Directory(
-        path.join((await getTemporaryDirectory()).path, 'nexmusic_uploads'),
-      ).create(recursive: true);
-      final source = prepared.files.single;
-      copy = await File(source.path).copy(
-        path.join(
-          directory.path,
-          '${newMusicId()}${path.extension(source.path)}',
-        ),
-      );
-      if (!mounted ||
-          request != _streamRequest ||
-          _account != _music.personal) {
-        return;
-      }
-      final uploadCopy = copy;
-      setState(() {
-        final previousCount = _picked.length;
-        _add(
-          uploadCopy.path,
-          path.basename(source.path),
-          uploadCopy.lengthSync(),
-        );
-        if (_picked.length > previousCount) {
-          final item = _picked.last;
-          item.title = _title.text;
-          item.artist = _artist.text;
-          item.artistRead = true;
-          item.durationMs = song.durationMs;
-          retained = true;
-        }
-      });
-    } on SongShareCancelled {
-      if (mounted && request == _streamRequest) {
-        setState(() => _streamError = 'Audio preparation cancelled.');
-      }
-    } catch (error) {
-      if (mounted && request == _streamRequest) {
-        setState(() => _streamError = 'Could not prepare this song. $error');
-      }
-    } finally {
-      if (!retained && copy != null) await _deleteQuietlyUpload(copy);
-      await prepared?.dispose();
-      if (mounted && request == _streamRequest) {
-        _streamPreparation = null;
-        setState(() {
-          _streamBusy = false;
-          if (_account != _music.personal) {
-            _streamError = 'Your account changed. Open the song again.';
-          }
-        });
-      }
-    }
+    _streamJob?.removeListener(_streamChanged);
+    _streamJob?.cancel();
+    _picked.clear();
+    _streamJob = _music.prepareStreamUpload(song)..addListener(_streamChanged);
+    setState(() {});
   }
 
-  Future<void> _deleteQuietlyUpload(File file) async {
-    try {
-      if (await file.exists()) await file.delete();
-    } catch (_) {}
+  void _streamChanged() {
+    if (!mounted) return;
+    final item = _streamJob?.item;
+    setState(() {
+      if (item != null && !_streamSubmitted && !_picked.contains(item)) {
+        _picked.add(item);
+      }
+    });
   }
 
   void _cancelStreamAudio() {
-    ++_streamRequest;
-    _streamPreparation?.cancel();
-    _streamPreparation = null;
-    setState(() {
-      _streamBusy = false;
-      _streamError = 'Audio preparation cancelled.';
-    });
+    _streamJob?.cancel();
+    setState(() {});
   }
 
   @override
   void dispose() {
-    ++_streamRequest;
-    _streamPreparation?.cancel();
+    _streamJob?.removeListener(_streamChanged);
+    if (!_streamSubmitted) _streamJob?.cancel();
     final job = _job;
     if (job != null) {
       job.removeListener(_onJob);
@@ -4314,8 +4246,8 @@ class _UploadScreenState extends State<UploadScreen> {
   /// Adds a picked file, or notes why it cannot be uploaded.
   void _add(String filePath, String name, int sizeBytes) {
     if (_picked.any((item) => item.path == filePath)) return;
-    final reason = uploadKindFor(name) == null
-        ? 'file type not supported'
+    final reason = uploadKindFor(name) != 'audio'
+        ? 'Library uploads support audio only'
         : sizeBytes >= maxUploadBytes
         ? 'larger than 100 MB'
         // A size of -1 means the phone did not report one.
@@ -4368,7 +4300,7 @@ class _UploadScreenState extends State<UploadScreen> {
     // extensions into exact MIME types (m4a → audio/mp4), and phones that
     // label a file differently (audio/x-m4a) grey it out. _add rejects the
     // rest.
-    final files = await FilePicker.pickFiles(type: FileType.media);
+    final files = await FilePicker.pickFiles(type: FileType.audio);
     if (!mounted || files.isEmpty) return;
     final sizes = await Future.wait([
       for (final file in files) _sizeOf(file.lengthSync, file.length),
@@ -4422,6 +4354,18 @@ class _UploadScreenState extends State<UploadScreen> {
     }
     final categoryId = _categoryId;
     if (categoryId == null) return;
+    final streamJob = _streamJob;
+    if (streamJob != null && !streamJob.cancelled && streamJob.error == null) {
+      _streamSubmitted = true;
+      streamJob.submit(
+        title: _title.text.trim(),
+        artist: _artist.text.trim(),
+        categories: _categoryIds,
+      );
+      _picked.clear();
+      unawaited(Navigator.maybePop(context));
+      return;
+    }
     final job = _job;
     if (_picked.isEmpty && job != null && job.waiting) {
       // The audio is still on its way. The job uploads it once it arrives, so
@@ -4460,6 +4404,7 @@ class _UploadScreenState extends State<UploadScreen> {
         _picked.clear();
         _rejected.clear();
       });
+      unawaited(Navigator.maybePop(context));
     }
   }
 
@@ -4496,9 +4441,11 @@ class _UploadScreenState extends State<UploadScreen> {
     final requested = job?.uploadRequested ?? false;
     final ready =
         !requested &&
-        !_streamBusy &&
         music.categories.any((category) => category.id == _categoryId) &&
         (fetching ||
+            (_streamBusy &&
+                _streamError == null &&
+                _title.text.trim().isNotEmpty) ||
             (count > 0 && (count > 1 || _title.text.trim().isNotEmpty)));
 
     return Scaffold(
@@ -4528,7 +4475,7 @@ class _UploadScreenState extends State<UploadScreen> {
           else
             _FileBox(
               title: count == 0
-                  ? 'Choose songs or videos'
+                  ? 'Choose audio songs'
                   : '$count file${count == 1 ? '' : 's'} · ${_fileSize(totalBytes)}',
               detail: count == 0
                   ? 'Pick one or many · up to 100 MB each'
@@ -4706,7 +4653,7 @@ class _UploadScreenState extends State<UploadScreen> {
                             ? music.uploadWaitMessage!
                             : paused
                             ? 'Paused. A song that was halfway starts again when you resume.'
-                            : 'Keep nexMusic open until the uploads finish.'
+                            : 'Uploads continue in the background, including while your phone is locked.'
                       : summary,
                   style: TextStyle(color: _muted(context), fontSize: 12),
                 ),
@@ -4774,34 +4721,18 @@ class _UploadScreenState extends State<UploadScreen> {
                 ),
               ),
             )
-          : SafeArea(
+          : failed > 0
+          ? SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                child: Row(
-                  children: [
-                    if (failed > 0) ...[
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: music.retryFailedUploads,
-                          child: Text('Retry failed ($failed)'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                    ],
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: () {
-                          music.clearUploads();
-                          Navigator.pop(context);
-                        },
-                        child: const Text('Done'),
-                      ),
-                    ),
-                  ],
+                padding: const EdgeInsets.all(20),
+                child: OutlinedButton(
+                  onPressed: music.retryFailedUploads,
+                  child: Text('Retry failed ($failed)'),
                 ),
               ),
-            ),
+            )
+          : null,
     );
   }
 }
@@ -5616,50 +5547,68 @@ class NowPlayingScreen extends StatelessWidget {
                             size: art,
                             imageUrl: song.artworkUrl,
                           ),
-                          if (song.providerId.startsWith('yt')) ...[
-                            const SizedBox(height: 16),
-                            FilledButton.tonalIcon(
-                              onPressed: () => _openSongVideo(context, song),
-                              icon: const Icon(
-                                Icons.smart_display_rounded,
-                                size: 20,
-                              ),
-                              label: const Text(
-                                'Watch Music Video',
-                                style: TextStyle(fontWeight: FontWeight.w600),
-                              ),
-                              style: FilledButton.styleFrom(
-                                backgroundColor: NexMusic.violet.withValues(
-                                  alpha: 0.15,
-                                ),
-                                foregroundColor: NexMusic.violet,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                  vertical: 10,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(24),
-                                  side: const BorderSide(
-                                    color: NexMusic.violet,
-                                    width: 1.2,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
+                          SizedBox(
+                            height: 64,
+                            child: song.providerId.startsWith('yt')
+                                ? Center(
+                                    child: FilledButton.tonalIcon(
+                                      onPressed: () =>
+                                          _openSongVideo(context, song),
+                                      icon: const Icon(
+                                        Icons.smart_display_rounded,
+                                        size: 20,
+                                      ),
+                                      label: const Text(
+                                        'Watch Music Video',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: NexMusic.violet
+                                            .withValues(alpha: 0.15),
+                                        foregroundColor: NexMusic.violet,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 20,
+                                          vertical: 10,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            24,
+                                          ),
+                                          side: const BorderSide(
+                                            color: NexMusic.violet,
+                                            width: 1.2,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                : null,
+                          ),
                           const SizedBox(height: 24),
                           Row(
+                            key: const ValueKey('now-playing-details'),
                             children: [
                               Expanded(
                                 child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
                                   children: [
                                     Text(
+                                      key: const ValueKey('now-playing-title'),
                                       song.title,
-                                      maxLines: 2,
+                                      maxLines: 1,
+                                      softWrap: false,
                                       overflow: TextOverflow.ellipsis,
+                                      strutStyle: const StrutStyle(
+                                        fontSize: 22,
+                                        height: 1.35,
+                                        forceStrutHeight: true,
+                                      ),
                                       style: const TextStyle(
                                         fontSize: 22,
+                                        height: 1.35,
                                         fontWeight: FontWeight.w600,
                                         letterSpacing: -0.3,
                                       ),
@@ -5668,23 +5617,42 @@ class NowPlayingScreen extends StatelessWidget {
                                     Text(
                                       state.category,
                                       maxLines: 1,
+                                      softWrap: false,
                                       overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(color: muted),
+                                      strutStyle: const StrutStyle(
+                                        fontSize: 14,
+                                        height: 1.4,
+                                        forceStrutHeight: true,
+                                      ),
+                                      style: TextStyle(
+                                        color: muted,
+                                        fontSize: 14,
+                                        height: 1.4,
+                                      ),
                                     ),
                                   ],
                                 ),
                               ),
-                              if (!song.isPrivate)
-                                IconButton(
-                                  tooltip: state.liked ? 'Unlike' : 'Like',
-                                  onPressed: () => music.toggleLike(song),
-                                  icon: Icon(
-                                    state.liked
-                                        ? Icons.favorite_rounded
-                                        : Icons.favorite_border_rounded,
-                                    color: state.liked ? NexMusic.violet : null,
-                                  ),
-                                ),
+                              SizedBox(
+                                width: 48,
+                                height: 48,
+                                child: song.isPrivate
+                                    ? null
+                                    : IconButton(
+                                        tooltip: state.liked
+                                            ? 'Unlike'
+                                            : 'Like',
+                                        onPressed: () => music.toggleLike(song),
+                                        icon: Icon(
+                                          state.liked
+                                              ? Icons.favorite_rounded
+                                              : Icons.favorite_border_rounded,
+                                          color: state.liked
+                                              ? NexMusic.violet
+                                              : null,
+                                        ),
+                                      ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 12),
@@ -5705,6 +5673,7 @@ class NowPlayingScreen extends StatelessWidget {
                                           SliderComponentShape.noOverlay,
                                     ),
                                     child: Slider(
+                                      key: const ValueKey('now-playing-seek'),
                                       value: value,
                                       max: max,
                                       onChanged: (next) => music.seek(
@@ -5738,6 +5707,7 @@ class NowPlayingScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 16),
                           Row(
+                            key: const ValueKey('now-playing-controls'),
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               IconButton(
@@ -6069,7 +6039,7 @@ class ProfileScreen extends StatelessWidget {
             context,
             SongListScreen(
               title: 'My uploads',
-              emptyText: 'Songs and videos you upload show up here.',
+              emptyText: 'Audio songs you upload show up here.',
               select: (music) => music.myUploads,
             ),
           ),
@@ -6135,6 +6105,12 @@ class ProfileScreen extends StatelessWidget {
           onTap: () => _push(context, const AdvanceScreen()),
         ),
         const Divider(),
+        _NavRow(
+          icon: Icons.translate_rounded,
+          title: 'Song languages',
+          subtitle: music.personal.settings.selectedLanguages.join(' · '),
+          onTap: () => _push(context, const SongLanguagesScreen()),
+        ),
         _NavRow(
           icon: Icons.tune,
           title: 'Listening settings',
@@ -6237,7 +6213,9 @@ class SongListScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final songs = context.select<MusicController, List<Song>>(select);
+    final songs = context.select<MusicController, List<Song>>(
+      (music) => music.visibleSongs(select(music)),
+    );
     return _SongSelectionScaffold(
       songs: songs,
       appBar: AppBar(title: Text(title)),
@@ -7021,11 +6999,15 @@ class _OwnedMediaEditorScreenState extends State<OwnedMediaEditorScreen> {
 /// When Upload is pressed before the audio arrives, the job keeps the request
 /// and uploads the file itself, so leaving the screen does not lose it.
 class SharedAudioJob extends ChangeNotifier {
-  SharedAudioJob._(this.link, this._music);
+  SharedAudioJob._(this.link, this._music) : _account = _music.personal;
+  final Object _account;
 
   /// Starts turning [link] into audio in a hidden browser.
   factory SharedAudioJob.start(String link, MusicController music) {
     final job = SharedAudioJob._(link, music);
+    unawaited(
+      music.phone?.setTransferActive('shared-audio:${job.hashCode}', true),
+    );
     _jobs.add(job);
     _publish();
     // A converter that never finishes should not keep a browser running.
@@ -7119,16 +7101,28 @@ class SharedAudioJob extends ChangeNotifier {
   }
 
   void _end() {
+    // Let a completed converter hand off to the upload owner before releasing
+    // its service lease, including when the phone is already locked.
+    scheduleMicrotask(() {
+      unawaited(
+        _music.phone?.setTransferActive('shared-audio:$hashCode', false),
+      );
+    });
     _deadline?.cancel();
     _jobs.remove(this);
     _publish();
   }
 
   void _upload(String path, ({String title, String categoryId}) request) {
+    if (_account != _music.personal) {
+      discardTemporaryCopy(path);
+      _music.announce('Your account changed. Share the song again.');
+      return;
+    }
     final file = File(path);
     final name = _fileName(path);
     final size = file.existsSync() ? file.lengthSync() : 0;
-    if (uploadKindFor(name) == null || size == 0 || size >= maxUploadBytes) {
+    if (uploadKindFor(name) != 'audio' || size == 0 || size >= maxUploadBytes) {
       error = 'The converter sent a file nexMusic cannot upload.';
       _music.announce('A shared song could not be uploaded. $error');
       discardTemporaryCopy(path);
@@ -7692,6 +7686,8 @@ class _NexBrowserScreenState extends State<NexBrowserScreen> {
     });
     _snack('Downloading for nexMusic…');
     _userAgent ??= await _readUserAgent();
+    final transfer = 'browser-download:$hashCode';
+    await _music.phone?.setTransferActive(transfer, true);
     final result = await downloadBrowserMedia(
       url,
       referer: _currentPage,
@@ -7702,7 +7698,7 @@ class _NexBrowserScreenState extends State<NexBrowserScreen> {
           setState(() => _progress = percent);
         }
       },
-    );
+    ).whenComplete(() => _music.phone?.setTransferActive(transfer, false));
     if (!mounted) {
       final orphan = result.path;
       if (orphan != null) discardTemporaryCopy(orphan);
@@ -7735,7 +7731,10 @@ class _NexBrowserScreenState extends State<NexBrowserScreen> {
     }
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     await Navigator.of(context).push<void>(
-      MaterialPageRoute(builder: (_) => UploadScreen(initialPaths: [filePath])),
+      NexPageRoute(
+        builder: (_) => UploadScreen(initialPaths: [filePath]),
+        reducedMotion: MediaQuery.disableAnimationsOf(context),
+      ),
     );
     if (!_music.uploads.any(
       (item) => item.path == filePath || item.original?.path == filePath,

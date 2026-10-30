@@ -17,20 +17,87 @@ import 'package:nex_music/listening_player.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-Song song(
-  String id, {
-  String url = 'https://example.com/song.mp3',
-  String provider = '',
-}) => Song(
+Song song(String id, {String? url, String provider = ''}) => Song(
   id: id,
   title: 'Song $id',
   artist: 'Artist',
   kind: 'audio',
-  url: url,
+  url: url ?? 'https://example.com/$id.mp3',
   providerId: provider,
   sourceId: id,
 );
 void main() {
+  test(
+    'each category and playlist keeps one copy of a recording, independently',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final music = MusicController(
+        await SharedPreferences.getInstance(),
+        player: _PlaybackFake(),
+      );
+      final first = song(
+        'recording',
+      ).copyWith(categoryId: 'cat', extraCategoryIds: ['other']);
+      final duplicate = first.copyWith(id: 'duplicate');
+      music.songs = [first, first, duplicate];
+      expect(music.songsIn('cat').length, 1);
+      expect(music.songsIn('other').length, 1);
+      final playlist = music.personal.createPlaylist(
+        'First',
+        tracks: [first, first, duplicate],
+      );
+      expect(playlist.tracks.length, 1);
+      music.personal.addToPlaylist(playlist, duplicate);
+      expect(playlist.tracks.length, 1);
+      music.personal.addSongsToPlaylist(playlist, [first, duplicate]);
+      expect(playlist.tracks.length, 1);
+      final second = music.personal.createPlaylist(
+        'Second',
+        tracks: [duplicate],
+      );
+      expect(second.tracks.length, 1);
+      playlist.tracks.add(
+        duplicate,
+      ); // Simulates legacy/imported duplicate data.
+      final imported = music.personal.import(exportPlaylist(playlist));
+      expect(imported.tracks.length, 1);
+      expect(second.tracks.length, 1);
+      music.dispose();
+    },
+  );
+  test(
+    'Library Quick Picks excludes stream-only history and includes saved library sources',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final music = MusicController(
+        await SharedPreferences.getInstance(),
+        player: _PlaybackFake(),
+      );
+      final upload = song('uploaded'),
+          streamed = song('streamed', provider: 'header'),
+          saved = song('saved-stream', provider: 'header'),
+          local = song('local:one', url: 'content://media/audio/1');
+      music.songs = [upload];
+      music.personal.localTracks[local.id] = local;
+      music.personal.createPlaylist('Saved songs', tracks: [saved]);
+      for (final track in [upload, streamed, saved, local]) {
+        music.library.recordSongPlay(track);
+      }
+      expect(music.libraryQuickPicks.map((s) => s.id).toSet(), {
+        'uploaded',
+        'saved-stream',
+        'local:one',
+      });
+      music.personal.settings.values['songLanguages'] = ['Hindi'];
+      music.songs = [upload.copyWith(language: 'Tamil')];
+      // The language of the catalogue entry is authoritative for this scope.
+      expect(
+        music.libraryQuickPicks.map((s) => s.id),
+        isNot(contains('uploaded')),
+      );
+      music.dispose();
+    },
+  );
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
     'random play keeps Stream and Library queues separate and Home combines them',
@@ -117,13 +184,17 @@ void main() {
     final first = music.current!.id;
     await music.playRandomFrom(list, random: Random(1));
     expect(music.current?.id, isNot(first));
+    final current = music.current!;
+    await music.playRandomFrom([current]);
+    expect(music.notice, 'No other songs available here.');
+    expect(music.playback.queue.tracks.length, 2);
     await music.playRandomFrom([song('clip').copyWith(kind: 'video')]);
     expect(music.notice, 'No playable songs here.');
     music.dispose();
   });
 
   test(
-    'main Library random play switches categories and avoids overlapping memberships',
+    'main Library random play avoids the current recording without forcing category changes',
     () async {
       SharedPreferences.setMockInitialValues({});
       final music = MusicController(
@@ -138,43 +209,52 @@ void main() {
           ).copyWith(categoryId: 'a', extraCategoryIds: ['b']);
       music.songs = [a, b, overlap];
       await music.play(a, from: [a, overlap]);
-      for (var i = 0; i < 12; i++) {
+      var stayedInCategory = false;
+      for (var i = 0; i < 30; i++) {
         final previous = music.current!;
         await music.playRandom(MusicRandomScope.library, random: Random(i));
-        expect(
-          music.current!.categoryIds.toSet().intersection(
-            previous.categoryIds.toSet(),
-          ),
-          isEmpty,
-        );
+        expect(music.current!.id, isNot(previous.id));
+        stayedInCategory |= music.current!.categoryIds
+            .toSet()
+            .intersection(previous.categoryIds.toSet())
+            .isNotEmpty;
         expect(music.playback.queue.tracks.length, 3);
       }
+      expect(stayedInCategory, isTrue);
       music.dispose();
     },
   );
 
-  test('main Library random play switches playlists', () async {
-    SharedPreferences.setMockInitialValues({});
-    final music = MusicController(
-      await SharedPreferences.getInstance(),
-      player: _PlaybackFake(),
-    );
-    music.personal.settings.values['gapless'] = false;
-    final first = [song('one'), song('two')],
-        second = [song('three'), song('four')];
-    music.personal.createPlaylist('First', tracks: first);
-    music.personal.createPlaylist('Second', tracks: second);
-    await music.play(first.first, from: first);
-    for (var i = 0; i < 10; i++) {
-      final wasFirst = first.any((s) => s.id == music.current!.id);
-      await music.playRandom(MusicRandomScope.library, random: Random(i));
-      expect(first.any((s) => s.id == music.current!.id), !wasFirst);
-    }
-    music.dispose();
-  });
+  test(
+    'main Library random play may stay in a playlist but never repeats the current song',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final music = MusicController(
+        await SharedPreferences.getInstance(),
+        player: _PlaybackFake(),
+      );
+      music.personal.settings.values['gapless'] = false;
+      final first = [song('one'), song('two')],
+          second = [song('three'), song('four')];
+      music.personal.createPlaylist('First', tracks: first);
+      music.personal.createPlaylist('Second', tracks: second);
+      await music.play(first.first, from: first);
+      var stayedInPlaylist = false;
+      for (var i = 0; i < 30; i++) {
+        final previousId = music.current!.id;
+        final wasFirst = first.any((s) => s.id == music.current!.id);
+        await music.playRandom(MusicRandomScope.library, random: Random(i));
+        expect(music.current!.id, isNot(previousId));
+        stayedInPlaylist |=
+            first.any((s) => s.id == music.current!.id) == wasFirst;
+      }
+      expect(stayedInPlaylist, isTrue);
+      music.dispose();
+    },
+  );
 
   test(
-    'main Stream random play changes online albums and excludes library-only songs',
+    'main Stream random play avoids current recording and excludes library-only songs',
     () async {
       SharedPreferences.setMockInitialValues({});
       final music = MusicController(
@@ -193,9 +273,9 @@ void main() {
       music.songs = [song('library-only')];
       await music.play(a, from: [a]);
       for (var i = 0; i < 10; i++) {
-        final previousAlbum = music.current!.album;
+        final previousId = music.current!.id;
         await music.playRandom(MusicRandomScope.stream, random: Random(i));
-        expect(music.current!.album, isNot(previousAlbum));
+        expect(music.current!.id, isNot(previousId));
         expect(music.current!.isProvider, true);
       }
       music.dispose();

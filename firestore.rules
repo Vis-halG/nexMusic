@@ -95,7 +95,7 @@ service cloud.firestore {
         ])
         && request.resource.data.ownerUid == request.auth.uid
         && validTitle(request.resource.data.title)
-        && request.resource.data.kind in ['audio', 'video']
+        && request.resource.data.kind == 'audio'
         && categoryExists(request.resource.data.categoryId)
         && validCategoryList(request.resource.data)
         && request.resource.data.url is string
@@ -113,6 +113,7 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && request.resource.data.deleted == false;
       allow update: if signedIn()
+        && (request.resource.data.kind == 'audio' || request.resource.data.deleted == true)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title', 'categoryId', 'categoryIds', 'deleted', 'updatedAt'])
         && validTitle(request.resource.data.title)
         && categoryExists(request.resource.data.categoryId)

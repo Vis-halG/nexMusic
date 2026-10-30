@@ -171,6 +171,7 @@ class PersonalMusic extends ChangeNotifier {
     List<Song> tracks = const [],
     String cover = '🎧',
   }) {
+    tracks = uniqueMusicTracks(tracks);
     final value = name.trim();
     if (value.isEmpty || value.length > 80 || tracks.length > 300) {
       throw const FormatException(
@@ -196,6 +197,7 @@ class PersonalMusic extends ChangeNotifier {
     }
     final candidate = MusicPlaylist.fromJson(p.toJson());
     update(candidate);
+    candidate.tracks = uniqueMusicTracks(candidate.tracks);
     if (candidate.name.trim().isEmpty ||
         candidate.name.length > 80 ||
         candidate.tracks.length > 300) {
@@ -213,7 +215,9 @@ class PersonalMusic extends ChangeNotifier {
   }
 
   void addToPlaylist(MusicPlaylist p, Song song) {
-    if (p.tracks.any((s) => s.id == song.id)) return;
+    if (uniqueMusicTracks([...p.tracks, song]).length == p.tracks.length) {
+      return;
+    }
     if (p.tracks.length >= 300) {
       throw const FormatException('A playlist can contain up to 300 tracks.');
     }
@@ -256,6 +260,7 @@ class PersonalMusic extends ChangeNotifier {
   }
 
   bool accepts(Song song) =>
+      settings.allowsLanguage(song) &&
       !hiddenSongs.contains(song.id) &&
       !hiddenArtists.any(
         (artist) => musicArtists(

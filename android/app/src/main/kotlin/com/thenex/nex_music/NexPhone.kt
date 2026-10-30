@@ -94,6 +94,15 @@ object NexPhone {
 
     fun handle(context: Context, call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "setTransferActive" -> TransferService.setActive(
+                context, call.argument<String>("owner") ?: "transfer",
+                call.argument<Boolean>("active") == true,
+            )
+            "openBatterySettings" -> {
+                context.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:${context.packageName}"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
             "showProgress" -> notify(context, call, TRANSFERS_CHANNEL, ongoing = true)
             "showDone" -> notify(context, call, TRANSFERS_CHANNEL, ongoing = false)
             "showActivity" -> notify(context, call, ACTIVITY_CHANNEL, ongoing = false)
