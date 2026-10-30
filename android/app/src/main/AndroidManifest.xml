@@ -16,7 +16,8 @@
         android:label="nexMusic"
         android:name="${applicationName}"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round">
         <service android:name=".TransferService"
             android:exported="false"
             android:stopWithTask="false"

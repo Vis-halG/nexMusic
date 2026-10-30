@@ -1201,13 +1201,6 @@ class WelcomeScreen extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.12),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
                   ),
                   padding: const EdgeInsets.all(3),
                   child: ClipOval(
@@ -1231,7 +1224,7 @@ class WelcomeScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Upload songs and videos into categories.\nEveryone signed in can listen.',
+                'Upload audio songs into categories.\nEveryone signed in can listen.',
                 style: TextStyle(
                   fontSize: 15,
                   height: 1.5,

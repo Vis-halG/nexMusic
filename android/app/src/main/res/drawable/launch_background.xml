@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@android:color/white" />
-    <item android:width="192dp" android:height="192dp"
-        android:gravity="center" android:drawable="@drawable/nexmusic_logo" />
+    <item android:width="144dp" android:height="144dp"
+        android:gravity="center" android:drawable="@drawable/nexmusic_splash_mark" />
 </layer-list>

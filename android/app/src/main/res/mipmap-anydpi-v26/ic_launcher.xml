@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@android:color/white" />
+    <background android:drawable="@android:color/transparent" />
     <foreground>
-        <inset android:drawable="@drawable/nexmusic_logo" android:inset="12.5%" />
+        <inset android:drawable="@drawable/nexmusic_logo" android:inset="18%" />
     </foreground>
 </adaptive-icon>

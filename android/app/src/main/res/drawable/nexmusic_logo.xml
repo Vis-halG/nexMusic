@@ -4,7 +4,7 @@
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="192dp" android:height="192dp"
     android:viewportWidth="512" android:viewportHeight="512">
-    <path android:fillColor="#FFFFFFFF" android:pathData="M0,0H512V512H0Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M256,0A256,256 0,1 1,256,512A256,256 0,1 1,256,0Z" />
     <path android:fillColor="#00000000" android:strokeWidth="22" android:strokeLineCap="round" android:strokeLineJoin="round"
         android:pathData="M125,276C143,276 145,315 174,315C222,315 225,139 260,139C302,139 311,317 348,317C380,317 380,256 426,256">
         <aapt:attr name="android:strokeColor">

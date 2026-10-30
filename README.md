@@ -4,7 +4,7 @@ Flutter app for shared music, online songs and music videos.
 Signed-in listeners can upload audio songs into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.14+8037` has four tabs: Home, Stream, Library and Profile. Home
+Version `0.4.15+8038` has four tabs: Home, Stream, Library and Profile. Home
 groups public songs and videos into global recently played/watched, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and an Artists chip that lists the people in the For
@@ -29,9 +29,16 @@ button shuffles only that list's songs.
 
 Swipe the mini player up for the next song or down for the previous song.
 Hold it, then slide left/right or up/down to adjust playback volume. Its volume
-bar stays for two seconds after release, then restores song details with a
-subtle fade; the trailing direction arrows are omitted. The mini player keeps its controls fixed, has
-a larger play button, and omits the playback timeline and video shortcut.
+bar stays for one second after release, then restores song details with a
+subtle fade; the trailing direction arrows are omitted. The mini player has
+a stack of song cards: dragging moves and fades the current card while revealing
+the next or previous card underneath. Short/cancelled drags settle back. Rapid
+swipes queue in order, and haptics confirm successful playback changes only.
+Manual swipes wrap within the current queue without changing repeat/autoplay.
+Native preloading, seeking and source edits run in sequence, and callbacks from
+the outgoing source cannot overwrite a manual track change. Failed switches
+restore the previous song and show an error rather than a success vibration.
+The player has a larger play button, and omits the playback timeline and video shortcut.
 Both adjacent sources resolve in advance; ready native sources are reused
 when skipping forward or backward. Volume stays at the chosen level across
 track changes, crossfades and sleep-timer cancellation. Reduced-motion settings
@@ -48,8 +55,12 @@ Play/Pause and Next. Earlier Android versions retain the standard transport cont
 Android controls the notification and lock-screen layout. The owner's Clean up
 song names tool removes leading numeric prefixes of any length, updates queued
 titles, and leaves numbers elsewhere in the title intact.
-The app logo is an SVG, with matching Android vector launcher and splash artwork.
-Launch adds a short logo fade/scale, skipped when reduced motion is enabled.
+The app logo is a circular SVG, with matching Android vector artwork and round
+launcher resources. Transparent adaptive-icon margins preserve its circular
+appearance inside launcher masks. Launch uses a 200 ms fade with no hold;
+the app accepts input from its first frame. Reduced motion skips the effect.
+The Android splash uses an unframed vector mark and an explicitly transparent
+icon background in both system themes; no dark badge or welcome-logo shadow.
 Now Playing titles stay on one line with an ellipsis; the details, seek bar and
 transport controls keep their positions when songs or providers change.
 Tapping the mini player expands its pill surface into the full player and

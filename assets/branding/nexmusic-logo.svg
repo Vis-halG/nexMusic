@@ -12,7 +12,7 @@
       <stop offset="1" stop-color="#873CFF"/>
     </linearGradient>
   </defs>
-  <path d="M0 0H512V512H0Z" fill="#FFFFFF"/>
+  <circle cx="256" cy="256" r="256" fill="#FFFFFF"/>
   <path d="M125 276C143 276 145 315 174 315C222 315 225 139 260 139C302 139 311 317 348 317C380 317 380 256 426 256" stroke="url(#falling)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M84 256C124 256 132 195 159 195C201 195 199 374 250 374C287 374 294 195 342 195C365 195 379 232 388 236" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M84 256C124 256 132 195 159 195C201 195 199 374 250 374C287 374 294 195 342 195C365 195 379 232 388 236" stroke="url(#rising)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>

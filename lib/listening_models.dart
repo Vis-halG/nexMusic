@@ -233,6 +233,19 @@ class ListeningQueue {
     return index > 0 ? tracks[index - 1] : null;
   }
 
+  /// Manual swipes cycle inside the existing queue even with repeat off.
+  Song? swipeTarget({required bool next}) {
+    final candidate = next ? peekNext() : peekPrevious();
+    if (candidate != null && candidate.id != currentId) return candidate;
+    final index = tracks.indexWhere((s) => s.id == currentId);
+    if (index < 0) return null;
+    for (var step = 1; step < tracks.length; step++) {
+      final song = tracks[(index + (next ? step : -step)) % tracks.length];
+      if (song.id != currentId) return song;
+    }
+    return null;
+  }
+
   void add(Song song, {bool next = false}) {
     if (song.isVideo || song.id == currentId) return;
     if (tracks.any((s) => s.id == song.id)) {

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Unframed brand mark for Android splash screens. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="192dp" android:height="192dp"
+    android:viewportWidth="512" android:viewportHeight="512">
+    <path android:fillColor="#00000000" android:strokeWidth="22" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M125,276C143,276 145,315 174,315C222,315 225,139 260,139C302,139 311,317 348,317C380,317 380,256 426,256">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:startX="180" android:startY="130" android:endX="325" android:endY="326" android:type="linear">
+                <item android:offset="0" android:color="#FF873CFF" />
+                <item android:offset="0.5" android:color="#FF5824B8" />
+                <item android:offset="1" android:color="#FF873CFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="32" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M84,256C124,256 132,195 159,195C201,195 199,374 250,374C287,374 294,195 342,195C365,195 379,232 388,236" />
+    <path android:fillColor="#00000000" android:strokeWidth="22" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M84,256C124,256 132,195 159,195C201,195 199,374 250,374C287,374 294,195 342,195C365,195 379,232 388,236">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:startX="140" android:startY="195" android:endX="320" android:endY="376" android:type="linear">
+                <item android:offset="0" android:color="#FF873CFF" />
+                <item android:offset="0.55" android:color="#FF5824B8" />
+                <item android:offset="1" android:color="#FF873CFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

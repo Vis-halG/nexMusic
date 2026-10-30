@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nex_music/main.dart';
 import 'package:nex_music/music_controller.dart';
@@ -7,6 +8,30 @@ import 'package:nex_music/music_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'support/playback_test_player.dart';
+
+class _FailingSeek extends PlaybackTestPlayer {
+  bool fail = false;
+  @override
+  Future<void> seek(Duration? position, {int? index}) async {
+    if (fail) throw StateError('Native seek failed');
+    await super.seek(position, index: index);
+  }
+}
+
+List<String> _haptics() {
+  final calls = <String>[];
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+    if (call.method == 'HapticFeedback.vibrate')
+      calls.add(call.arguments as String);
+    return null;
+  });
+  addTearDown(
+    () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+  );
+  return calls;
+}
 
 final _songs = [
   for (var i = 0; i < 3; i++)
@@ -28,9 +53,10 @@ typedef _Harness = ({
 Future<_Harness> _mount(
   WidgetTester tester, {
   bool reducedMotion = false,
+  PlaybackTestPlayer? native,
 }) async {
   SharedPreferences.setMockInitialValues({});
-  final player = PlaybackTestPlayer();
+  final player = native ?? PlaybackTestPlayer();
   final music = MusicController(
     await SharedPreferences.getInstance(),
     player: player,
@@ -68,7 +94,115 @@ Future<_Harness> _mount(
 
 void main() {
   testWidgets(
-    'a tiny horizontal movement after hold adjusts volume and release waits two seconds',
+    'drag reveals the prepared card immediately and fades the outgoing card; cancel restores it',
+    (tester) async {
+      final state = await _mount(tester);
+      final vibrations = _haptics();
+      final current = find.byKey(const ValueKey('mini-player-current-card'));
+      final before = tester.getRect(current);
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('Track 1')),
+      );
+      await gesture.moveBy(const Offset(0, -42));
+      await tester.pump();
+      expect(tester.getRect(current).top, lessThan(before.top));
+      expect(
+        tester
+            .widget<Opacity>(
+              find.byKey(const ValueKey('mini-player-card-opacity')),
+            )
+            .opacity,
+        lessThan(1),
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('mini-player-upcoming-card')),
+          matching: find.text('Track 2'),
+        ),
+        findsOneWidget,
+      );
+      await gesture.cancel();
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's1');
+      expect(tester.getRect(current), before);
+      expect(vibrations, isEmpty);
+      await state.close();
+    },
+  );
+
+  testWidgets(
+    'two rapid swipes both switch tracks and vibrate only after confirmation',
+    (tester) async {
+      final state = await _mount(tester);
+      final vibrations = _haptics();
+      final surface = find.byKey(const ValueKey('mini-player-gestures'));
+      await tester.drag(surface, const Offset(0, -90));
+      await tester.drag(surface, const Offset(0, -90));
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's0');
+      expect(vibrations.length, 2);
+      await state.close();
+    },
+  );
+
+  testWidgets(
+    'a failed native switch restores the old song without a success vibration',
+    (tester) async {
+      final native = _FailingSeek();
+      final state = await _mount(tester, native: native);
+      state.music.personal.settings.values['gapless'] = true;
+      await state.music.playback.queueChanged();
+      await tester.pumpAndSettle();
+      final vibrations = _haptics();
+      native.fail = true;
+      await tester.drag(
+        find.byKey(const ValueKey('mini-player-gestures')),
+        const Offset(0, -90),
+      );
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's1');
+      expect(vibrations, isEmpty);
+      expect(state.music.notice, contains('could not play'));
+      expect(
+        tester
+            .widget<Opacity>(
+              find.byKey(const ValueKey('mini-player-card-opacity')),
+            )
+            .opacity,
+        1,
+      );
+      native.fail = false;
+      await state.music.togglePlay();
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's1');
+      expect(native.isPlaying, isTrue);
+      await state.close();
+    },
+  );
+
+  testWidgets('a one-song queue never gives a false switch vibration', (
+    tester,
+  ) async {
+    final state = await _mount(tester);
+    await state.music.play(_songs[1], from: [_songs[1]]);
+    await tester.pumpAndSettle();
+    final vibrations = _haptics();
+    await tester.drag(
+      find.byKey(const ValueKey('mini-player-gestures')),
+      const Offset(0, -90),
+    );
+    await tester.pumpAndSettle();
+    expect(state.music.current?.id, 's1');
+    expect(vibrations, isEmpty);
+    expect(
+      find.byKey(const ValueKey('mini-player-upcoming-card')),
+      findsNothing,
+    );
+    await state.close();
+  });
+
+  testWidgets(
+    'a tiny horizontal movement after hold adjusts volume and release waits one second',
     (tester) async {
       final state = await _mount(tester);
       await state.music.playback.setVolume(0.5);
@@ -85,7 +219,7 @@ void main() {
       await tester.pump();
       expect(state.music.playback.volume, lessThan(0.5));
       await gesture.up();
-      await tester.pump(const Duration(milliseconds: 1900));
+      await tester.pump(const Duration(milliseconds: 900));
       expect(find.text('Volume'), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 101));
       await tester.pumpAndSettle();
@@ -100,7 +234,7 @@ void main() {
   ) async {
     final state = await _mount(tester);
     final source = tester.getRect(
-      find.byKey(const ValueKey('mini-player-gestures')),
+      find.byKey(const ValueKey('mini-player-current-card')),
     );
     await tester.tap(find.text('Track 1'));
     await tester.pump();
@@ -130,7 +264,7 @@ void main() {
   });
 
   testWidgets(
-    'mini controls keep their positions through swipes and have no video or timeline',
+    'swipe cards move and fade but controls return to their resting positions',
     (tester) async {
       final state = await _mount(tester);
       final play = find.byKey(const ValueKey('mini-player-play'));
@@ -146,7 +280,7 @@ void main() {
         const Offset(0, -100),
       );
       await tester.pump(const Duration(milliseconds: 90));
-      expect(tester.getRect(play), before);
+      expect(tester.getRect(play).top, lessThan(before.top));
       await tester.pumpAndSettle();
       expect(state.music.current?.id, 's2');
       expect(state.player.sourceLoads, loads);

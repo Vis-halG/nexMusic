@@ -14,7 +14,7 @@ class _LaunchLogoState extends State<LaunchLogo>
   late final _animation =
       AnimationController(
         vsync: this,
-        duration: const Duration(milliseconds: 760),
+        duration: const Duration(milliseconds: 200),
       )..addStatusListener((status) {
         if (status == AnimationStatus.completed && mounted) {
           setState(() => _finished = true);
@@ -48,22 +48,19 @@ class _LaunchLogoState extends State<LaunchLogo>
     return Stack(
       fit: StackFit.expand,
       children: [
-        ExcludeSemantics(child: widget.child),
+        widget.child,
         Positioned.fill(
-          child: BlockSemantics(
+          child: IgnorePointer(
             child: FadeTransition(
               opacity: Tween(begin: 1.0, end: 0.0).animate(
-                CurvedAnimation(
-                  parent: _animation,
-                  curve: const Interval(0.7, 1, curve: Curves.easeOut),
-                ),
+                CurvedAnimation(parent: _animation, curve: Curves.easeOutCubic),
               ),
               child: ColoredBox(
                 key: const ValueKey('launch-logo'),
                 color: Theme.of(context).scaffoldBackgroundColor,
                 child: Center(
                   child: ScaleTransition(
-                    scale: Tween(begin: 0.9, end: 1.0).animate(
+                    scale: Tween(begin: 0.98, end: 1.0).animate(
                       CurvedAnimation(
                         parent: _animation,
                         curve: const Interval(
