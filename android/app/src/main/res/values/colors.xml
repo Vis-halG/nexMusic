@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Adaptive launcher backgrounds must be opaque to avoid a dark matte. -->
+    <color name="nexmusic_launcher_background">#E8D9FF</color>
     <!-- Tint for the activity push notification (see AndroidManifest.xml). -->
     <color name="widget_accent">#7C3AED</color>
 </resources>

@@ -21,11 +21,15 @@ class ListeningPlayer extends ChangeNotifier {
     this.onQueueEnd,
     this.onAudioSession,
     this.canPlay,
-  }) {
+    AudioPlayer Function()? standbyPlayerFactory,
+  }) : _createStandbyPlayer =
+           standbyPlayerFactory ??
+           (() => AudioPlayer(handleAudioSessionActivation: false)) {
     _attach();
     _clock = Timer.periodic(const Duration(milliseconds: 500), (_) => _tick());
   }
   AudioPlayer _player;
+  final AudioPlayer Function() _createStandbyPlayer;
   AudioPlayer get player => _player;
   final MusicSourceResolver resolve;
   final ListeningSettings Function() settings;
@@ -59,7 +63,10 @@ class ListeningPlayer extends ChangeNotifier {
   bool _disposed = false,
       _preparing = false,
       _fading = false,
-      _advancing = false;
+      _advancing = false,
+      _recovering = false,
+      _playRequested = false;
+  final _recoveryAttempts = <String, int>{};
   int _generation = 0, _listened = 0;
   int? _manualGeneration;
   bool _reloadNeeded = false;
@@ -67,6 +74,7 @@ class ListeningPlayer extends ChangeNotifier {
   Completer<void>? _advanceDone;
   DateTime _lastTick = DateTime.now();
   AudioPlayer? _standby;
+  StreamSubscription<PlayerException>? _standbyErrors;
   String? _preparedId;
   final _sources = <String, ({DateTime at, AudioSource source})>{};
   final _resolving = <String, Future<AudioSource>>{};
@@ -81,6 +89,7 @@ class ListeningPlayer extends ChangeNotifier {
   Duration? get sleepRemaining => sleepAt?.difference(DateTime.now());
 
   void _attach() {
+    final attached = _player;
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
@@ -92,19 +101,9 @@ class ListeningPlayer extends ChangeNotifier {
     );
     _subs.add(
       _player.playerStateStream.listen((state) {
-        if (_disposed) return;
+        if (_disposed || attached != _player) return;
         notifyListeners();
-        if (state.processingState == ProcessingState.completed &&
-            _manualGeneration == null &&
-            !_fading &&
-            !_advancing) {
-          if (sleepAfterTrack) {
-            clearSleep();
-            unawaited(pause());
-          } else {
-            unawaited(next(completed: true));
-          }
-        }
+        _advanceIfCompleted();
       }),
     );
     _subs.add(
@@ -143,13 +142,103 @@ class ListeningPlayer extends ChangeNotifier {
     );
     _subs.add(
       _player.errorStream.listen((error) {
-        if (!_disposed) {
-          onError(
-            'Playback interrupted. Retry this track or choose another source.',
-          );
+        if (!_disposed && attached == _player && _manualGeneration == null) {
+          unawaited(_recoverPlayback(attached, _generation));
         }
       }),
     );
+  }
+
+  void _advanceIfCompleted() {
+    if (_disposed ||
+        !_player.playing ||
+        _player.processingState != ProcessingState.completed ||
+        _manualGeneration != null ||
+        _fading ||
+        _advancing) {
+      return;
+    }
+    if (sleepAfterTrack) {
+      clearSleep();
+      unawaited(pause());
+    } else {
+      unawaited(next(completed: true));
+    }
+  }
+
+  // play() completes when audio ends, so awaiting it would block transport
+  // controls. Always consume errors from that long-running future.
+  Future<void> _startPlayer(AudioPlayer player, int generation) async {
+    try {
+      await player.play();
+    } on PlayerInterruptedException {
+      // A newer source, pause or stop owns the transport now.
+    } catch (_) {
+      await Future<void>.delayed(Duration.zero);
+      if (!_disposed && generation == _generation && player == _player) {
+        await _recoverPlayback(player, generation);
+      } else if (!_disposed &&
+          generation == _generation &&
+          player == _standby) {
+        await _discardFailedStandby(player, generation);
+      }
+    }
+  }
+
+  void _cancelStandbyErrors() {
+    unawaited(_standbyErrors?.cancel());
+    _standbyErrors = null;
+  }
+
+  Future<void> _discardFailedStandby(AudioPlayer failed, int generation) async {
+    if (_disposed || generation != _generation || failed != _standby) return;
+    _cancelStandbyErrors();
+    _sources.remove(_preparedId);
+    _fading = false;
+    _fadeProgress = 0;
+    _preparedId = null;
+    _standby = null;
+    await failed.dispose();
+    if (_disposed || generation != _generation) return;
+    await _player.setVolume(_volume * _sleepGain);
+    _advanceIfCompleted();
+  }
+
+  Future<void> _recoverPlayback(AudioPlayer failed, int generation) async {
+    if (_disposed ||
+        _recovering ||
+        !_playRequested ||
+        generation != _generation ||
+        failed != _player ||
+        _manualGeneration != null) {
+      return;
+    }
+    final song = queue.current;
+    if (song == null) return;
+    _recovering = true;
+    try {
+      final attempt = _recoveryAttempts.update(
+        song.id,
+        (n) => n + 1,
+        ifAbsent: () => 1,
+      );
+      if (attempt <= 1) {
+        final at = failed.position;
+        _reloadNeeded = true;
+        _sources.remove(song.id);
+        _resolving.remove(song.id);
+        ++_sourceEpoch;
+        final retryGeneration = _generation + 1;
+        if (await play(song, initialPosition: at)) return;
+        if (_disposed || !_playRequested || retryGeneration != _generation) {
+          return;
+        }
+      }
+      onError('This track is unavailable. Trying the next queued song.');
+      await _advance(completed: true, skipCurrent: true);
+    } finally {
+      _recovering = false;
+    }
   }
 
   Future<AudioSource> _source(Song song) async {
@@ -215,6 +304,8 @@ class ListeningPlayer extends ChangeNotifier {
     bool recordHistory = true,
   }) async {
     if (song.isVideo || _disposed || !_allowed(song)) return false;
+    _playRequested = true;
+    if (!_recovering) _recoveryAttempts.remove(song.id);
     from = from?.where(_allowed).toList();
     final generation = ++_generation;
     _manualGeneration = generation;
@@ -222,6 +313,7 @@ class ListeningPlayer extends ChangeNotifier {
     notifyListeners();
     Map<String, dynamic>? previousQueue;
     try {
+      _cancelStandbyErrors();
       await _standby?.dispose();
       if (generation != _generation || _disposed) return false;
       _standby = null;
@@ -290,7 +382,7 @@ class ListeningPlayer extends ChangeNotifier {
         onTrack(song);
         _reloadNeeded = false;
         onQueueSaved?.call();
-        unawaited(_player.play());
+        unawaited(_startPlayer(_player, generation));
         return true;
       });
       if (switched) {
@@ -317,6 +409,7 @@ class ListeningPlayer extends ChangeNotifier {
       if (ownedLoading) _manualGeneration = null;
       if (!_disposed && (ownedLoading || generation == _generation)) {
         notifyListeners();
+        _advanceIfCompleted();
       }
     }
   }
@@ -371,6 +464,7 @@ class ListeningPlayer extends ChangeNotifier {
     }
     _preparing = true;
     final generation = _generation;
+    AudioPlayer? preparingStandby;
     try {
       final source = await _source(next);
       if (generation != _generation ||
@@ -380,16 +474,20 @@ class ListeningPlayer extends ChangeNotifier {
         return;
       }
       if (settings().crossfade > 0) {
-        final standby = AudioPlayer(handleAudioSessionActivation: false);
+        final standby = preparingStandby = _createStandbyPlayer();
         await standby.setVolume(0);
         await standby.setAudioSource(source);
         if (generation != _generation || _disposed) {
-          await standby.dispose();
           return;
         }
+        _cancelStandbyErrors();
         await _standby?.dispose();
         _standby = standby;
+        preparingStandby = null;
         _preparedId = next.id;
+        _standbyErrors = standby.errorStream.listen((_) {
+          unawaited(_discardFailedStandby(standby, _generation));
+        });
       } else if (settings().gapless) {
         // Native playlist transitions happen without waiting on Dart/network.
         await _editSources(() async {
@@ -415,6 +513,7 @@ class ListeningPlayer extends ChangeNotifier {
     } catch (_) {
       /* Playback remains usable when preload fails. */
     } finally {
+      await preparingStandby?.dispose();
       _preparing = false;
       if (generation != _generation && !_disposed) unawaited(_prepareNext());
     }
@@ -426,6 +525,7 @@ class ListeningPlayer extends ChangeNotifier {
     _fading = false;
     await _player.setVolume(_volume * _sleepGain);
     _preparedId = null;
+    _cancelStandbyErrors();
     await _standby?.dispose();
     _standby = null;
     await _editSources(() async {
@@ -458,31 +558,50 @@ class ListeningPlayer extends ChangeNotifier {
     await queueChanged();
   }
 
-  Future<void> next({bool completed = false}) async {
+  Future<void> next({bool completed = false}) => _advance(completed: completed);
+
+  Future<void> _advance({
+    bool completed = false,
+    bool skipCurrent = false,
+  }) async {
     if (_advancing || _disposed) return;
     _advancing = true;
     final advancing = _advanceDone = Completer<void>();
+    final generation = _generation;
+    final originalQueue = queue.toJson();
     try {
       queue.retainWhere(_allowed);
-      if (queue.peekNext(completed: completed) == null && settings().autoplay) {
+      if (queue.peekNext(completed: completed && !skipCurrent) == null &&
+          settings().autoplay) {
         try {
           await onQueueEnd?.call();
         } catch (_) {
           onError('Could not load more tracks. Your queue is saved.');
         }
       }
-      final song = queue.peekNext(completed: completed);
-      if (song == null) {
-        _flush(completed: completed);
-        await pause();
-        return;
-      }
+      if (_disposed || generation != _generation) return;
+      var song = queue.peekNext(completed: completed && !skipCurrent);
       _flush(completed: completed);
-      await play(song);
+      final attempted = <String>{
+        if (skipCurrent && queue.currentId != null) queue.currentId!,
+      };
+      while (song != null && attempted.add(song.id)) {
+        final expectedGeneration = _generation + 1;
+        if (await play(song)) return;
+        if (_disposed || _generation != expectedGeneration) return;
+        if (!completed) return;
+        // Failed automatic starts must not trap the queue on an unavailable
+        // source. Each queued song is tried at most once per advance.
+        queue.select(song, record: false);
+        song = queue.peekNext();
+      }
+      if (attempted.isNotEmpty) queue.restore(originalQueue);
+      await pause();
     } finally {
       _advancing = false;
       if (identical(_advanceDone, advancing)) _advanceDone = null;
       advancing.complete();
+      _advanceIfCompleted();
     }
   }
 
@@ -523,21 +642,36 @@ class ListeningPlayer extends ChangeNotifier {
             : restoredPosition,
       );
     } else {
-      unawaited(_player.play());
+      _playRequested = true;
+      unawaited(_startPlayer(_player, _generation));
     }
   }
 
   Future<void> pause() async {
+    if (_disposed) return;
+    ++_generation;
+    _playRequested = false;
+    _manualGeneration = null;
+    _fading = false;
+    _fadeProgress = 0;
     _flush();
     await _player.pause();
     await _standby?.pause();
+    await _standby?.seek(Duration.zero);
+    await _standby?.setVolume(0);
+    await _player.setVolume(_volume * _sleepGain);
+    if (!_disposed) notifyListeners();
   }
 
   Future<void> stop() async {
     ++_generation;
+    _playRequested = false;
+    _fading = false;
+    _fadeProgress = 0;
     _manualGeneration = null;
     _flush();
     clearSleep();
+    _cancelStandbyErrors();
     await _standby?.dispose();
     _standby = null;
     await _player.stop();
@@ -649,17 +783,32 @@ class ListeningPlayer extends ChangeNotifier {
     _fading = true;
     _fadeProgress = 0;
     final generation = _generation, outgoing = _player;
-    unawaited(incoming.play());
+    unawaited(_startPlayer(incoming, generation));
     final steps = math.max(1, left.inMilliseconds ~/ 50);
     for (var i = 1; i <= steps; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       if (_disposed || generation != _generation || !_fading) return;
       if (!outgoing.playing) {
+        if (outgoing.processingState == ProcessingState.completed) {
+          if (incoming.playing) {
+            await _finishCrossfade(outgoing, incoming, next, generation);
+          } else {
+            // The completion event was suppressed while fading. If the
+            // preloaded player also failed to start, use the normal queue
+            // transition so the track-end event is not lost.
+            _fading = false;
+            _fadeProgress = 0;
+            await outgoing.setVolume(_volume);
+            unawaited(this.next(completed: true));
+          }
+          return;
+        }
         await incoming.pause();
         await incoming.seek(Duration.zero);
         await incoming.setVolume(0);
         await outgoing.setVolume(_volume);
         _fading = false;
+        _fadeProgress = 0;
         return;
       }
       _fadeProgress = i / steps;
@@ -667,18 +816,37 @@ class ListeningPlayer extends ChangeNotifier {
       await incoming.setVolume(_volume * _fadeProgress);
     }
     if (_disposed || generation != _generation) return;
+    await _finishCrossfade(outgoing, incoming, next, generation);
+  }
+
+  Future<void> _finishCrossfade(
+    AudioPlayer outgoing,
+    AudioPlayer incoming,
+    Song next,
+    int generation,
+  ) async {
+    if (_disposed || generation != _generation) return;
+    await incoming.setVolume(_volume * _sleepGain);
+    if (_disposed || generation != _generation || !_fading) return;
     _flush(completed: true);
     _player = incoming;
+    _cancelStandbyErrors();
     _standby = null;
     _preparedId = null;
     queue.select(next);
     onPlayerChanged?.call(incoming);
+    _fading = false;
+    _fadeProgress = 0;
     _attach();
     onTrack(next);
     onQueueSaved?.call();
     await outgoing.dispose();
-    _fading = false;
+    if (_disposed || generation != _generation || _player != incoming) return;
     notifyListeners();
+    if (incoming.processingState == ProcessingState.completed) {
+      unawaited(this.next(completed: true));
+      return;
+    }
     unawaited(_prepareNext());
   }
 
@@ -688,6 +856,7 @@ class ListeningPlayer extends ChangeNotifier {
     _disposed = true;
     ++_generation;
     _clock?.cancel();
+    _cancelStandbyErrors();
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }

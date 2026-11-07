@@ -292,8 +292,8 @@ class ListeningQueue {
   Map<String, dynamic> toJson() => {
     'tracks': tracks.map((s) => trackJson(s)).toList(),
     'currentId': currentId,
-    'history': history,
-    'remaining': _remaining,
+    'history': List<String>.of(history),
+    'remaining': List<String>.of(_remaining),
     'shuffled': shuffled,
     'repeat': repeat.name,
   };

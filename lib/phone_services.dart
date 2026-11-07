@@ -10,6 +10,16 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 
+const nexAudioServiceConfig = AudioServiceConfig(
+  androidNotificationChannelId: 'com.thenex.nexmusic.playback',
+  androidNotificationChannelName: 'Music playback',
+  androidNotificationIcon: 'drawable/ic_notification',
+  notificationColor: Color(0xFF7C3AED),
+  // Decoder pauses during track switches must retain the foreground service
+  // so Android permits the next start while the screen is locked.
+  androidStopForegroundOnPause: false,
+);
+
 /// Cloudflare Worker that sends activity notifications to the other phones
 /// (see push_worker/worker.js). Not a secret: it only accepts signed-in
 /// nexMusic users. Activity is not reported while it is empty.

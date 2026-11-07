@@ -19,7 +19,7 @@ Song track(String provider, String id, {String kind = 'audio'}) => Song(
 );
 
 void main() {
-  testWidgets('four tabs remain and Stream combines both catalogues', (
+  testWidgets('five tabs remain and Stream combines both catalogues', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 780);
@@ -45,7 +45,7 @@ void main() {
       tester
           .widgetList<NavigationDestination>(find.byType(NavigationDestination))
           .map((d) => d.label),
-      ['Home', 'Stream', 'Library', 'Profile'],
+      ['Home', 'Stream', 'Library', 'Downloads', 'Profile'],
     );
     await tester.tap(find.text('Never Played').first);
     await tester.pumpAndSettle();

@@ -1529,7 +1529,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
             _push(context, const NexBrowserScreen(sharedLink: ''));
           }
         case 'downloads':
-          setState(() => _currentTabIndex = 2);
+          setState(() => _currentTabIndex = 3);
       }
     });
   }
@@ -1547,6 +1547,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
   var _streamKey = GlobalKey<_SpotifyStreamViewState>();
   final _homeKey = GlobalKey<_SpotifyHomeViewState>();
   final _libraryKey = GlobalKey<_SpotifyLibraryViewState>();
+  final _downloadsKey = GlobalKey<_SpotifyLibraryViewState>();
   _SpotifyStreamView? _streamView;
   Object? _streamAccount;
   bool _streamVisited = false;
@@ -1582,7 +1583,8 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
     final Widget currentView = switch (_currentTabIndex) {
       1 => const SizedBox.shrink(),
       2 => _SpotifyLibraryView(key: _libraryKey),
-      3 => const ProfileScreen(showAppBar: false),
+      3 => _SpotifyLibraryView(key: _downloadsKey, downloadsOnly: true),
+      4 => const ProfileScreen(showAppBar: false),
       _ => _SpotifyHomeView(key: _homeKey),
     };
 
@@ -1604,7 +1606,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
           ],
         ),
       ),
-      floatingActionButton: _currentTabIndex < 3
+      floatingActionButton: _currentTabIndex < 4
           ? FloatingActionButton(
               tooltip: 'Play random',
               onPressed: () => _playRandomSong(context),
@@ -1646,6 +1648,14 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
                 label: 'Library',
               ),
               NavigationDestination(
+                icon: Icon(Icons.download_outlined),
+                selectedIcon: Icon(
+                  Icons.download_rounded,
+                  color: NexMusic.violet,
+                ),
+                label: 'Downloads',
+              ),
+              NavigationDestination(
                 icon: Icon(Icons.person_outline_rounded),
                 selectedIcon: Icon(
                   Icons.person_rounded,
@@ -1667,6 +1677,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
       0 => _homeKey.currentState?.shuffleSongs,
       1 => _streamKey.currentState?.shuffleSongs,
       2 => _libraryKey.currentState?.shuffleSongs,
+      3 => _downloadsKey.currentState?.shuffleSongs,
       _ => null,
     };
     if (listed != null) {
@@ -1676,6 +1687,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
     final scope = switch (_currentTabIndex) {
       1 => MusicRandomScope.stream,
       2 => MusicRandomScope.library,
+      3 => MusicRandomScope.library,
       _ => MusicRandomScope.home,
     };
     unawaited(music.playRandom(scope));
@@ -2708,7 +2720,16 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _TabTitle(icon: Icons.stream_rounded, title: 'Stream'),
+                _TabTitle(
+                  icon: Icons.stream_rounded,
+                  title: 'Stream',
+                  trailing: IconButton(
+                    tooltip: 'Stream settings',
+                    icon: const Icon(Icons.tune_rounded),
+                    onPressed: () =>
+                        _push(context, const StreamSettingsScreen()),
+                  ),
+                ),
                 Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 20,
@@ -2862,9 +2883,10 @@ double _behindBars(BuildContext context) =>
 
 /// The big icon and title at the top of the Stream and Library tabs.
 class _TabTitle extends StatelessWidget {
-  const _TabTitle({required this.icon, required this.title});
+  const _TabTitle({required this.icon, required this.title, this.trailing});
   final IconData icon;
   final String title;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -2873,10 +2895,13 @@ class _TabTitle extends StatelessWidget {
       children: [
         Icon(icon, color: NexMusic.violet, size: 30),
         const SizedBox(width: 12),
-        Text(
-          title,
-          style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700),
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700),
+          ),
         ),
+        ?trailing,
       ],
     ),
   );
@@ -3472,7 +3497,9 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _SpotifyLibraryView extends StatefulWidget {
-  const _SpotifyLibraryView({super.key});
+  const _SpotifyLibraryView({super.key, this.downloadsOnly = false});
+
+  final bool downloadsOnly;
 
   @override
   State<_SpotifyLibraryView> createState() => _SpotifyLibraryViewState();
@@ -3488,7 +3515,9 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
   /// The listed songs while a chip or search narrows them, for the shuffle
   /// button. Null means the whole library.
   List<Song>? get shuffleSongs =>
-      _chip == 'all' && _search.text.trim().isEmpty ? null : _tracks;
+      !widget.downloadsOnly && _chip == 'all' && _search.text.trim().isEmpty
+      ? null
+      : _tracks;
 
   @override
   void dispose() {
@@ -3506,6 +3535,11 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
   Widget build(BuildContext context) {
     final music = context.watch<MusicController>();
     final playlists = music.personal.playlists;
+    final downloadedSongs = music.downloadedSongs;
+    final downloadedIds = downloadedSongs.map((song) => song.id).toSet();
+    final downloadedCategoryIds = downloadedSongs
+        .expand((song) => song.categoryIds)
+        .toSet();
     final category = music.categories
         .where((c) => _chip == 'cat:${c.id}')
         .firstOrNull;
@@ -3514,22 +3548,36 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
     if (_chip.contains(':') && category == null && playlist == null) {
       _chip = 'all';
     }
-    final source = music.visibleSongs(switch (_chip) {
-      'liked' => music.communitySongs(MediaCollection.likedSongs),
-      'downloads' => music.downloadedSongs,
-      _ when category != null => music.songsIn(category.id),
-      _ when playlist != null => playlist.tracks,
-      _ => {
-        for (final s in [
-          ...music.songs,
-          ...music.likedSongs,
-          ...music.downloadedSongs,
-          ...music.personal.localTracks.values,
-          for (final p in playlists) ...p.tracks,
-        ])
-          s.id: s,
-      }.values.toList(),
-    });
+    final source = music.visibleSongs(
+      widget.downloadsOnly
+          ? switch (_chip) {
+              'liked' => downloadedSongs.where(music.isLiked).toList(),
+              _ when category != null =>
+                music
+                    .songsIn(category.id)
+                    .where(music.isSongDownloaded)
+                    .toList(),
+              _ when playlist != null =>
+                playlist.tracks.where(music.isSongDownloaded).toList(),
+              _ => downloadedSongs,
+            }
+          : switch (_chip) {
+              'liked' => music.communitySongs(MediaCollection.likedSongs),
+              'downloads' => music.downloadedSongs,
+              _ when category != null => music.songsIn(category.id),
+              _ when playlist != null => playlist.tracks,
+              _ => {
+                for (final s in [
+                  ...music.songs,
+                  ...music.likedSongs,
+                  ...music.downloadedSongs,
+                  ...music.personal.localTracks.values,
+                  for (final p in playlists) ...p.tracks,
+                ])
+                  s.id: s,
+              }.values.toList(),
+            },
+    );
     final query = _search.text.trim().toLowerCase();
     final tracks = _tracks = query.isEmpty
         ? source
@@ -3540,26 +3588,47 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
                     .contains(query),
               )
               .toList();
-    final picks = _chip == 'all' && query.isEmpty
+    final picks = !widget.downloadsOnly && _chip == 'all' && query.isEmpty
         ? music.libraryQuickPicks
         : const <Song>[];
-    final title = switch (_chip) {
-      'liked' => 'Liked Songs',
-      'downloads' => 'Downloads',
-      _ => category?.name ?? playlist?.name ?? 'All songs',
-    };
+    final title = widget.downloadsOnly
+        ? switch (_chip) {
+            'liked' => 'Liked downloads',
+            _ when category != null => '${category.name} downloads',
+            _ when playlist != null => '${playlist.name} downloads',
+            _ => 'Downloaded songs',
+          }
+        : switch (_chip) {
+            'liked' => 'Liked Songs',
+            'downloads' => 'Downloads',
+            _ => category?.name ?? playlist?.name ?? 'All songs',
+          };
 
     return CustomScrollView(
-      key: const PageStorageKey('library'),
+      key: PageStorageKey(widget.downloadsOnly ? 'downloads' : 'library'),
       slivers: [
         _dotsRefreshControl(music.refreshCatalog),
         SliverToBoxAdapter(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _TabTitle(
-                icon: Icons.library_music_rounded,
-                title: 'Library',
+              _TabTitle(
+                icon: widget.downloadsOnly
+                    ? Icons.download_rounded
+                    : Icons.library_music_rounded,
+                title: widget.downloadsOnly ? 'Downloads' : 'Library',
+                trailing: IconButton(
+                  tooltip: widget.downloadsOnly
+                      ? 'Download manager and settings'
+                      : 'Library settings',
+                  icon: const Icon(Icons.tune_rounded),
+                  onPressed: () => _push(
+                    context,
+                    widget.downloadsOnly
+                        ? const MusicDownloadsScreen()
+                        : const LibrarySettingsScreen(),
+                  ),
+                ),
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(
@@ -3570,7 +3639,9 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
                   controller: _search,
                   onChanged: (_) => setState(() {}),
                   decoration: InputDecoration(
-                    hintText: 'Search your library',
+                    hintText: widget.downloadsOnly
+                        ? 'Search your downloads'
+                        : 'Search your library',
                     prefixIcon: const Icon(Icons.search_rounded),
                     suffixIcon: _search.text.isEmpty
                         ? null
@@ -3585,14 +3656,21 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
               // Category options sit on the list heading, since holding a
               // chip now moves it.
               _ReorderableChips(
-                orderKey: 'library_chip_order',
+                orderKey: widget.downloadsOnly
+                    ? 'downloads_chip_order'
+                    : 'library_chip_order',
                 chips: [
                   ('all', 'All'),
                   ('liked', 'Liked'),
-                  ('downloads', 'Downloads'),
-                  for (final c in music.categories) ('cat:${c.id}', c.name),
+                  if (!widget.downloadsOnly) ('downloads', 'Downloads'),
+                  for (final c in music.categories)
+                    if (!widget.downloadsOnly ||
+                        downloadedCategoryIds.contains(c.id))
+                      ('cat:${c.id}', c.name),
                   for (final p in playlists)
-                    ('pl:${p.id}', '${p.cover} ${p.name}'),
+                    if (!widget.downloadsOnly ||
+                        p.tracks.any((song) => downloadedIds.contains(song.id)))
+                      ('pl:${p.id}', '${p.cover} ${p.name}'),
                 ],
                 selected: _chip,
                 onSelected: _select,
@@ -3635,7 +3713,9 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
                   padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
                   child: Text(
                     query.isEmpty
-                        ? 'Nothing here yet.'
+                        ? widget.downloadsOnly
+                              ? 'Download songs from Stream or Library to play them offline.'
+                              : 'Nothing here yet.'
                         : 'No songs match "${_search.text.trim()}".',
                     style: TextStyle(color: _muted(context)),
                   ),

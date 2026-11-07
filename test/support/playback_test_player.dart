@@ -4,18 +4,28 @@ import 'package:just_audio/just_audio.dart';
 
 /// Playback without a platform decoder, with observable controls and volume.
 class PlaybackTestPlayer extends Fake implements AudioPlayer {
-  final _states = StreamController<PlayerState>.broadcast(sync: true);
+  final _states = StreamController<PlayerState>.broadcast();
+  final _errors = StreamController<PlayerException>.broadcast(sync: true);
   final List<AudioSource> sources = [];
   final List<double> volumes = [];
   bool isPlaying = false;
   Duration lastSeek = Duration.zero;
   int sourceLoads = 0, _index = 0;
+  ProcessingState state = ProcessingState.ready;
+  Duration trackDuration = const Duration(minutes: 3);
+  void emitState(ProcessingState value, {bool? playing}) {
+    state = value;
+    if (playing != null) isPlaying = playing;
+    _states.add(PlayerState(isPlaying, state));
+  }
+
+  void emitError(PlayerException error) => _errors.add(error);
   @override
   bool get playing => isPlaying;
   @override
-  ProcessingState get processingState => ProcessingState.ready;
+  ProcessingState get processingState => state;
   @override
-  Duration get duration => const Duration(minutes: 3);
+  Duration get duration => trackDuration;
   @override
   Duration get position => lastSeek;
   @override
@@ -44,7 +54,20 @@ class PlaybackTestPlayer extends Fake implements AudioPlayer {
   @override
   Stream<int?> get currentIndexStream => const Stream.empty();
   @override
-  Stream<PlayerException> get errorStream => const Stream.empty();
+  Stream<PlayerException> get errorStream => _errors.stream;
+
+  @override
+  Future<Duration?> setAudioSource(
+    AudioSource source, {
+    bool preload = true,
+    int? initialIndex,
+    Duration? initialPosition,
+  }) => setAudioSources(
+    [source],
+    preload: preload,
+    initialIndex: initialIndex,
+    initialPosition: initialPosition,
+  );
 
   @override
   Future<Duration?> setAudioSources(
@@ -60,6 +83,7 @@ class PlaybackTestPlayer extends Fake implements AudioPlayer {
       ..clear()
       ..addAll(audioSources);
     lastSeek = initialPosition ?? Duration.zero;
+    state = ProcessingState.ready;
     return duration;
   }
 
@@ -95,5 +119,8 @@ class PlaybackTestPlayer extends Fake implements AudioPlayer {
   @override
   Future<void> setLoopMode(LoopMode mode) async {}
   @override
-  Future<void> dispose() async => _states.close();
+  Future<void> dispose() async {
+    await _states.close();
+    await _errors.close();
+  }
 }

@@ -1163,6 +1163,24 @@ class MusicDownloadsScreen extends StatelessWidget {
             onChanged: (v) => music.setListeningSetting('smartDownloads', v),
           ),
           ListTile(
+            title: const Text('Download quality'),
+            subtitle: Text(
+              '${music.personal.settings.quality('downloadQuality').kbps} kbps target',
+            ),
+            trailing: DropdownButton<MusicQuality>(
+              value: music.personal.settings.quality('downloadQuality'),
+              items: [
+                for (final q in MusicQuality.values)
+                  DropdownMenuItem(value: q, child: Text(q.label)),
+              ],
+              onChanged: (v) {
+                if (v != null) {
+                  music.setListeningSetting('downloadQuality', v.name);
+                }
+              },
+            ),
+          ),
+          ListTile(
             title: const Text('Storage budget'),
             trailing: DropdownButton<int>(
               value: music.personal.settings.storageBudgetMb,
@@ -1244,12 +1262,14 @@ class MusicDownloadsScreen extends StatelessWidget {
   }
 }
 
-class ListeningSettingsScreen extends StatelessWidget {
-  const ListeningSettingsScreen({super.key});
+class StreamSettingsScreen extends StatelessWidget {
+  const StreamSettingsScreen({super.key});
+
   @override
   Widget build(BuildContext context) {
-    final music = context.watch<MusicController>(),
-        settings = music.personal.settings;
+    final music = context.watch<MusicController>();
+    final settings = music.personal.settings;
+
     Widget quality(String title, String key) => ListTile(
       title: Text(title),
       subtitle: Text('${settings.quality(key).kbps} kbps target'),
@@ -1264,6 +1284,106 @@ class ListeningSettingsScreen extends StatelessWidget {
         },
       ),
     );
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Stream settings')),
+      body: ListView(
+        children: [
+          quality('Wi-Fi streaming quality', 'wifiQuality'),
+          quality('Mobile streaming quality', 'mobileQuality'),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Text(
+              'Available quality depends on each music source.',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class LibrarySettingsScreen extends StatelessWidget {
+  const LibrarySettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final music = context.watch<MusicController>();
+    final categories = music.categories;
+    final playlists = music.personal.playlists;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Library settings')),
+      body: ListView(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.sync_rounded),
+            title: const Text('Sync library'),
+            subtitle: Text(
+              music.personal.syncError ??
+                  (music.personal.cloudAvailable
+                      ? 'Likes, playlists and listening activity sync to your account'
+                      : 'Sign in to sync across devices'),
+            ),
+            trailing: music.personal.syncing
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : null,
+            onTap: () => music.personal.syncNow(),
+          ),
+          ListTile(
+            leading: const Icon(Icons.add_rounded),
+            title: const Text('New category'),
+            onTap: () async => _createCategory(context),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 20, 20, 8),
+            child: Text(
+              'Categories',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+          ),
+          if (categories.isEmpty)
+            const ListTile(title: Text('No categories yet.')),
+          for (final category in categories)
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: Text(category.name),
+              subtitle: Text('${music.songsIn(category.id).length} songs'),
+              trailing: const Icon(Icons.more_vert_rounded),
+              onTap: () => _categoryActions(context, category),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 20, 20, 8),
+            child: Text(
+              'Playlists',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+          ),
+          if (playlists.isEmpty)
+            const ListTile(title: Text('No playlists yet.')),
+          for (final playlist in playlists)
+            ListTile(
+              leading: const Icon(Icons.queue_music_rounded),
+              title: Text(playlist.name),
+              subtitle: Text('${playlist.tracks.length} songs'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _push(context, PlaylistScreen(id: playlist.id)),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class ListeningSettingsScreen extends StatelessWidget {
+  const ListeningSettingsScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    final music = context.watch<MusicController>(),
+        settings = music.personal.settings;
     return Scaffold(
       appBar: AppBar(title: const Text('Listening settings')),
       body: ListView(
@@ -1300,34 +1420,12 @@ class ListeningSettingsScreen extends StatelessWidget {
                   music.setListeningSetting('crossfade', v.toInt()),
             ),
           ),
-          quality('Wi-Fi streaming quality', 'wifiQuality'),
-          quality('Mobile streaming quality', 'mobileQuality'),
-          quality('Download quality', 'downloadQuality'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            child: Text(
-              'Audio estimate: ${(settings.quality('downloadQuality').kbps * 240 / 8 / 1024).toStringAsFixed(1)} MB for a 4-minute track. Actual size varies; video streams may be larger.',
-              style: const TextStyle(fontSize: 12),
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            child: Text(
-              'Available quality depends on each source. YouTube music downloads include video data.',
-              style: TextStyle(fontSize: 12),
-            ),
-          ),
           if (MusicDevice.android)
             ListTile(
               leading: const Icon(Icons.equalizer),
               title: const Text('Equalizer & bass'),
               onTap: () => _push(context, const EqualizerScreen()),
             ),
-          ListTile(
-            leading: const Icon(Icons.download_outlined),
-            title: const Text('Downloads & storage'),
-            onTap: () => _push(context, const MusicDownloadsScreen()),
-          ),
           if (MusicDevice.android)
             ListTile(
               leading: const Icon(Icons.battery_charging_full_rounded),

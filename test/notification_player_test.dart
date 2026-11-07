@@ -30,6 +30,8 @@ Future<({MusicController music, NexAudioHandler handler})> _controller() async {
   );
   music.personal.settings.values['gapless'] = false;
   await music.play(_track, from: [_track]);
+  // The notification follows the player's asynchronous state stream.
+  await Future<void>.value();
   return (music: music, handler: handler);
 }
 

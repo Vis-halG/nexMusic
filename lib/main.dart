@@ -44,12 +44,7 @@ Future<void> main() async {
     try {
       audioHandler = await AudioService.init(
         builder: () => NexAudioHandler(player),
-        config: const AudioServiceConfig(
-          androidNotificationChannelId: 'com.thenex.nexmusic.playback',
-          androidNotificationChannelName: 'Music playback',
-          androidNotificationIcon: 'drawable/ic_notification',
-          notificationColor: NexMusic.violet,
-        ),
+        config: nexAudioServiceConfig,
       );
     } catch (error) {
       debugPrint('Lock screen controls are unavailable: $error');

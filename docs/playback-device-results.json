@@ -1,0 +1,147 @@
+{
+  "device": "emulator-5554",
+  "soakSecondsPerMode": 60,
+  "passed": 19,
+  "failed": 0,
+  "results": [
+    {
+      "name": "sequential queue without preloading",
+      "pass": true,
+      "ms": 6945
+    },
+    {
+      "name": "gapless repeat all: twelve native transitions",
+      "pass": true,
+      "ms": 24408
+    },
+    {
+      "name": "crossfade: eight handoffs retain playback and volume",
+      "pass": true,
+      "ms": 12667
+    },
+    {
+      "name": "pause and immediate resume during a real crossfade",
+      "pass": true,
+      "ms": 2363
+    },
+    {
+      "name": "HTTP 404 next track is skipped automatically",
+      "pass": true,
+      "ms": 5448
+    },
+    {
+      "name": "HTTP interruption reloads with a refreshed source",
+      "pass": true,
+      "ms": 8289
+    },
+    {
+      "name": "sleep after track pauses intentionally",
+      "pass": true,
+      "ms": 2254
+    },
+    {
+      "name": "jiosaavn: actual stream start, middle and ending",
+      "pass": true,
+      "ms": 10240
+    },
+    {
+      "name": "ytmusic: actual stream start, middle and ending",
+      "pass": true,
+      "ms": 22723
+    },
+    {
+      "name": "sequential after switching to Home",
+      "pass": true,
+      "seconds": 10.928,
+      "details": {
+        "transitions": 4,
+        "pid": "12234"
+      }
+    },
+    {
+      "name": "sequential with screen locked",
+      "pass": true,
+      "seconds": 10.965,
+      "details": {
+        "transitions": 4,
+        "pid": "12234"
+      }
+    },
+    {
+      "name": "gapless after switching to Home",
+      "pass": true,
+      "seconds": 11.341,
+      "details": {
+        "transitions": 5,
+        "pid": "12234"
+      }
+    },
+    {
+      "name": "gapless with screen locked",
+      "pass": true,
+      "seconds": 10.945,
+      "details": {
+        "transitions": 5,
+        "pid": "12234"
+      }
+    },
+    {
+      "name": "crossfade after switching to Home",
+      "pass": true,
+      "seconds": 11.329,
+      "details": {
+        "transitions": 6,
+        "pid": "12234"
+      }
+    },
+    {
+      "name": "crossfade with screen locked",
+      "pass": true,
+      "seconds": 10.98,
+      "details": {
+        "transitions": 6,
+        "pid": "12234"
+      }
+    },
+    {
+      "name": "notification pause and resume while locked",
+      "pass": true,
+      "seconds": 4.129,
+      "details": {
+        "serviceRetainedDuringPause": true
+      }
+    },
+    {
+      "name": "fresh stream recovery while locked",
+      "pass": true,
+      "seconds": 13.261,
+      "details": {
+        "resolves": 2,
+        "positionMs": 7968
+      }
+    },
+    {
+      "name": "gapless locked soak",
+      "pass": true,
+      "seconds": 61.394,
+      "details": {
+        "transitions": 30,
+        "pid": "12234"
+      }
+    },
+    {
+      "name": "crossfade locked soak",
+      "pass": true,
+      "seconds": 61.309,
+      "details": {
+        "transitions": 39,
+        "pid": "12234"
+      }
+    }
+  ],
+  "diagnosticMessages": [
+    "This track could not play. Check the connection or local file, then retry.",
+    "HTTP harness: StateError",
+    "HTTP harness: StateError"
+  ]
+}

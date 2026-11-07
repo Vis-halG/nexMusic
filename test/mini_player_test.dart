@@ -23,8 +23,9 @@ List<String> _haptics() {
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
-    if (call.method == 'HapticFeedback.vibrate')
+    if (call.method == 'HapticFeedback.vibrate') {
       calls.add(call.arguments as String);
+    }
     return null;
   });
   addTearDown(
