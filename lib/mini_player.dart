@@ -20,7 +20,7 @@ class _MiniPlayerState extends State<MiniPlayer>
   late final _motion = AnimationController.unbounded(vsync: this);
   final _pendingSwipes = <bool>[];
   Timer? _volumeDismiss;
-  double _swipeStart = 0, _swipeDistance = 0, _cardHeight = 66;
+  double _swipeStart = 0, _swipeDistance = 0, _dragOrigin = 0, _cardHeight = 66;
   double _volumeStart = 1, _volumeOrigin = 0, _volumeOriginX = 0;
   bool? _volumeHorizontal;
   bool _showVolume = false,
@@ -87,6 +87,7 @@ class _MiniPlayerState extends State<MiniPlayer>
     _queuedGesture = _draining;
     if (_draining) return;
     _motion.stop();
+    _dragOrigin = _motion.value;
     final music = context.read<MusicController>();
     setState(() {
       _showVolume = false;
@@ -102,9 +103,10 @@ class _MiniPlayerState extends State<MiniPlayer>
     final music = context.read<MusicController>();
     final target = music.playback.queue.swipeTarget(next: _swipeDistance < 0);
     if (_target?.id != target?.id) setState(() => _target = target);
+    final limit = _cardHeight * (target == null ? 0.18 : 0.85);
     _motion.value = MediaQuery.disableAnimationsOf(context)
         ? 0
-        : (_swipeDistance * 0.7).clamp(-_cardHeight, _cardHeight);
+        : (_dragOrigin + _swipeDistance * 0.7).clamp(-limit, limit);
   }
 
   void _swipeEnd(DragEndDetails details) {
@@ -151,7 +153,7 @@ class _MiniPlayerState extends State<MiniPlayer>
           _showVolume = false;
         });
         final switching = music.playback.swipeTo(target, backwards: !direction);
-        await _animate((direction ? -1 : 1) * _cardHeight * 1.15);
+        await _animate((direction ? -1 : 1) * _cardHeight);
         final switched = await switching;
         if (!mounted) return;
         if (switched && music.current?.id == target.id) {
@@ -288,6 +290,31 @@ class _MiniPlayerState extends State<MiniPlayer>
     );
     final foreground = _departing ?? _track(music, song);
     final behind = _target ?? state.next ?? state.previous;
+    // Keep artwork and text outside the per-frame animation builder. Only
+    // the two card layers move; provider updates still refresh their state.
+    final upcoming = behind == null
+        ? null
+        : ExcludeSemantics(
+            child: IgnorePointer(
+              child: RepaintBoundary(
+                child: Material(
+                  key: const ValueKey('mini-player-upcoming-card'),
+                  shape: const StadiumBorder(),
+                  clipBehavior: Clip.antiAlias,
+                  elevation: 6,
+                  shadowColor: Colors.black.withValues(alpha: 0.25),
+                  color: scheme.surfaceContainerHigh,
+                  child: _MiniPlayerFace(
+                    song: behind,
+                    subtitle: _track(music, behind).subtitle,
+                    playing: _draining ? state.playing : false,
+                    liked: music.isLiked(behind),
+                    loading: _draining && state.loading,
+                  ),
+                ),
+              ),
+            ),
+          );
     final front = SizedBox(
       key: const ValueKey('mini-player-current-card'),
       height: rowHeight,
@@ -423,32 +450,9 @@ class _MiniPlayerState extends State<MiniPlayer>
                             left: 8 * (1 - progress),
                             right: 8 * (1 - progress),
                             height: rowHeight,
-                            child: ExcludeSemantics(
-                              child: IgnorePointer(
-                                child: Opacity(
-                                  opacity: 0.7 + 0.3 * progress,
-                                  child: RepaintBoundary(
-                                    child: Material(
-                                      key: const ValueKey(
-                                        'mini-player-upcoming-card',
-                                      ),
-                                      shape: const StadiumBorder(),
-                                      clipBehavior: Clip.antiAlias,
-                                      color: scheme.surfaceContainerHigh,
-                                      child: _MiniPlayerFace(
-                                        song: behind,
-                                        subtitle: _track(
-                                          music,
-                                          behind,
-                                        ).subtitle,
-                                        playing: _draining,
-                                        liked: music.isLiked(behind),
-                                        loading: _draining && state.loading,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
+                            child: Opacity(
+                              opacity: 0.7 + 0.3 * progress,
+                              child: upcoming,
                             ),
                           ),
                         ],

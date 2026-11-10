@@ -69,6 +69,12 @@ void main() {
       expect(find.text(label), findsNothing);
     }
     expect(find.text('YouTube video'), findsNothing);
+    await tester.ensureVisible(find.text('Artists').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Artists').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Artist'), findsOneWidget);
+    expect(find.textContaining(RegExp(r'^\d+ songs?$')), findsNothing);
     await tester.tap(find.text('Library'));
     await tester.pumpAndSettle();
     expect(find.byTooltip('Play random'), findsOneWidget);
@@ -88,7 +94,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Watch Music Video'), findsOneWidget);
+    expect(find.text('Watch Music Video'), findsNothing);
+    expect(find.text('Video'), findsOneWidget);
     await tester.pumpWidget(
       ChangeNotifierProvider.value(value: controller, child: const NexMusic()),
     );

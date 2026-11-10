@@ -68,6 +68,27 @@ class _NoisyIndices extends PlaybackTestPlayer {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('swiping while buffering reuses the prepared native source', () async {
+    final native = PlaybackTestPlayer();
+    final engine = ListeningPlayer(
+      player: native,
+      resolve: (s) async => AudioSource.uri(Uri.parse(s.url), tag: s),
+      settings: () => ListeningSettings(),
+      onTrack: (_) {},
+      onListening: (_, _, {skipped = false, completed = false}) {},
+      onError: fail,
+    );
+    await engine.play(_tracks.first, from: _tracks);
+    await Future<void>.delayed(Duration.zero);
+    expect(native.sources.length, 2);
+    final loads = native.sourceLoads;
+    native.emitState(ProcessingState.buffering);
+    expect(await engine.swipeTo(_tracks[1], backwards: false), isTrue);
+    expect(native.sourceLoads, loads);
+    expect(native.currentIndex, 1);
+    expect(engine.queue.current?.id, '1');
+    engine.dispose();
+  });
   test(
     'swiping during native preload waits for its playlist edit instead of losing the switch',
     () async {

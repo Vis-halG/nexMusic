@@ -260,6 +260,19 @@ extension MusicListeningActions on MusicController {
       s.id: s,
   }.values.where(allowsSong).toList();
 
+  /// Saved library sources, excluding songs only encountered in online search
+  /// or listening history. A saved provider song still belongs in the library.
+  List<Song> get libraryTracks => {
+    for (final song in [
+      ...songs,
+      ...likedSongs,
+      ...downloadedSongs,
+      ...personal.localTracks.values,
+      for (final playlist in personal.playlists) ...playlist.tracks,
+    ])
+      song.id: song,
+  }.values.where(allowsSong).toList();
+
   List<Song> randomSongsFor(MusicRandomScope scope) {
     final libraryTracks = <Song>[
       ...songs,
@@ -736,7 +749,9 @@ extension MusicListeningActions on MusicController {
 
   Future<void> searchAllMusic(String query) async {
     final request = ++_providerRequest;
+    final account = personal;
     providerQuery = query.trim();
+    providerSongs = [];
     providerLoading = providerQuery.isNotEmpty;
     providerError = null;
     if (providerQuery.isEmpty) {
@@ -746,7 +761,7 @@ extension MusicListeningActions on MusicController {
     }
     notifyListeners();
     final result = await discovery.browse(query: providerQuery);
-    if (request != _providerRequest) return;
+    if (request != _providerRequest || account != personal) return;
     providerSongs = rankForListener(result.songs);
     library.rememberSongs(providerSongs);
     providerLoading = false;

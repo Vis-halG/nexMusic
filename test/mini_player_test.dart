@@ -54,6 +54,7 @@ typedef _Harness = ({
 Future<_Harness> _mount(
   WidgetTester tester, {
   bool reducedMotion = false,
+  bool fullScreen = false,
   PlaybackTestPlayer? native,
 }) async {
   SharedPreferences.setMockInitialValues({});
@@ -75,7 +76,9 @@ Future<_Harness> _mount(
           ).copyWith(disableAnimations: reducedMotion),
           child: child!,
         ),
-        home: const Scaffold(bottomNavigationBar: MiniPlayer()),
+        home: fullScreen
+            ? const NowPlayingScreen()
+            : const Scaffold(bottomNavigationBar: MiniPlayer()),
       ),
     ),
   );
@@ -94,6 +97,145 @@ Future<_Harness> _mount(
 }
 
 void main() {
+  testWidgets(
+    'grabbing a settling mini card continues from its visible position',
+    (tester) async {
+      final state = await _mount(tester);
+      final card = find.byKey(const ValueKey('mini-player-current-card'));
+      final restingTop = tester.getTopLeft(card).dy;
+      final first = await tester.startGesture(tester.getCenter(card));
+      await first.moveBy(const Offset(0, -42));
+      await tester.pump();
+      await first.cancel();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 40));
+      final settlingTop = tester.getTopLeft(card).dy;
+      expect(settlingTop, lessThan(restingTop));
+      final second = await tester.startGesture(tester.getCenter(card));
+      await second.moveBy(const Offset(0, -22));
+      await tester.pump();
+      expect(tester.getTopLeft(card).dy, closeTo(settlingTop - 22 * 0.7, 0.1));
+      await second.cancel();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await state.close();
+    },
+  );
+
+  testWidgets(
+    'single-song mini player resists dragging instead of disappearing',
+    (tester) async {
+      final state = await _mount(tester);
+      await state.music.play(_songs[1], from: [_songs[1]]);
+      await tester.pumpAndSettle();
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.text('Track 1')),
+      );
+      await gesture.moveBy(const Offset(0, -180));
+      await tester.pump();
+      expect(
+        tester
+            .widget<Opacity>(
+              find.byKey(const ValueKey('mini-player-card-opacity')),
+            )
+            .opacity,
+        greaterThan(0.8),
+      );
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's1');
+      await state.close();
+    },
+  );
+
+  testWidgets(
+    'full player swipes next and previous without moving transport controls or reloading prepared audio',
+    (tester) async {
+      final state = await _mount(tester, fullScreen: true);
+      state.music.personal.settings.values['gapless'] = true;
+      await state.music.playback.queueChanged();
+      await tester.pumpAndSettle();
+      final loads = state.player.sourceLoads;
+      final controls = find.byKey(const ValueKey('now-playing-controls'));
+      final bounds = tester.getRect(controls);
+      final art = find.byKey(const ValueKey('now-playing-artwork-gestures'));
+      await tester.drag(art, const Offset(0, -100));
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's2');
+      expect(tester.getRect(controls), bounds);
+      state.music.playback.position.value = const Duration(seconds: 35);
+      await tester.drag(art, const Offset(0, 100));
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's1');
+      expect(state.player.sourceLoads, loads);
+      expect(tester.getRect(controls), bounds);
+      expect(find.byType(NowPlayingScreen), findsOneWidget);
+      await state.close();
+    },
+  );
+
+  testWidgets('full player queues rapid swipes and confirms each change once', (
+    tester,
+  ) async {
+    final state = await _mount(tester, fullScreen: true);
+    final vibrations = _haptics();
+    final art = find.byKey(const ValueKey('now-playing-artwork-gestures'));
+    await tester.drag(art, const Offset(0, -90));
+    await tester.drag(art, const Offset(0, -90));
+    await tester.pumpAndSettle();
+    expect(state.music.current?.id, 's0');
+    expect(vibrations.length, 2);
+    expect(tester.takeException(), isNull);
+    await state.close();
+  });
+
+  testWidgets('full player cancelled and short drags keep the current track', (
+    tester,
+  ) async {
+    final state = await _mount(tester, fullScreen: true);
+    final art = find.byKey(const ValueKey('now-playing-artwork-gestures'));
+    final gesture = await tester.startGesture(tester.getCenter(art));
+    await gesture.moveBy(const Offset(0, -90));
+    await tester.pump();
+    await gesture.cancel();
+    await tester.pumpAndSettle();
+    expect(
+      state.music.current?.id,
+      's1',
+      reason: 'pointer cancellation must not select a track',
+    );
+    await tester.timedDrag(
+      art,
+      const Offset(0, -24),
+      const Duration(milliseconds: 350),
+    );
+    await tester.pumpAndSettle();
+    expect(state.music.current?.id, 's1');
+    final seek = find.byKey(const ValueKey('now-playing-seek'));
+    await tester.ensureVisible(seek);
+    await tester.drag(seek, const Offset(80, 0));
+    await tester.pumpAndSettle();
+    expect(state.music.current?.id, 's1');
+    expect(state.player.lastSeek, greaterThan(Duration.zero));
+    await state.close();
+  });
+
+  testWidgets('full player swipes work with reduced motion', (tester) async {
+    final state = await _mount(tester, fullScreen: true, reducedMotion: true);
+    await tester.drag(
+      find.byKey(const ValueKey('now-playing-artwork-gestures')),
+      const Offset(0, -90),
+    );
+    await tester.pumpAndSettle();
+    expect(state.music.current?.id, 's2');
+    final transform = tester.widget<Transform>(
+      find.byKey(const ValueKey('now-playing-artwork-motion')),
+    );
+    expect(transform.transform.storage[13], 0);
+    expect(tester.takeException(), isNull);
+    await state.close();
+  });
+
   testWidgets(
     'drag reveals the prepared card immediately and fades the outgoing card; cancel restores it',
     (tester) async {

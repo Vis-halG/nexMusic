@@ -297,6 +297,13 @@ class ListeningPlayer extends ChangeNotifier {
     return operation;
   }
 
+  // Buffering does not invalidate a loaded native playlist. Seeking its
+  // prepared item keeps the decoder/buffer instead of pausing and reloading.
+  bool get _canReuseSources =>
+      !_reloadNeeded &&
+      (_player.processingState == ProcessingState.ready ||
+          _player.processingState == ProcessingState.buffering);
+
   Future<bool> play(
     Song song, {
     List<Song>? from,
@@ -318,10 +325,7 @@ class ListeningPlayer extends ChangeNotifier {
       if (generation != _generation || _disposed) return false;
       _standby = null;
       _preparedId = null;
-      final ready =
-          !_reloadNeeded &&
-              from == null &&
-              _player.processingState == ProcessingState.ready
+      final ready = _canReuseSources && from == null
           ? _player.audioSources
                 .whereType<UriAudioSource>()
                 .where((s) => s.tag is Song && (s.tag as Song).id == song.id)
@@ -344,10 +348,7 @@ class ListeningPlayer extends ChangeNotifier {
               queue.currentId != song.id &&
               position.value.inSeconds < 30,
         );
-        final preparedIndex =
-            !_reloadNeeded &&
-                from == null &&
-                _player.processingState == ProcessingState.ready
+        final preparedIndex = _canReuseSources && from == null
             ? _player.audioSources.indexWhere(
                 (s) =>
                     s is UriAudioSource &&

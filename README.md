@@ -4,7 +4,7 @@ Flutter app for shared music, online songs and music videos.
 Signed-in listeners can upload audio songs into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.15+8038` has four tabs: Home, Stream, Library and Profile. Home
+Version `0.4.17+8040` has five tabs: Home, Stream, Library, Downloads and Profile. Home
 groups public songs and videos into global recently played/watched, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and an Artists chip that lists the people in the For
@@ -28,6 +28,11 @@ Inside a category, playlist, artist, Downloads or device music list, the same
 button shuffles only that list's songs.
 
 Swipe the mini player up for the next song or down for the previous song.
+The full-screen player supports the same gestures, with a gentle artwork
+transition while its controls stay in place. Swiping the artwork also works
+on short screens where the remaining content needs to scroll. Cancelled
+gestures settle back, and grabbing a settling mini card continues from its
+visible position. Loaded native sources are reused during buffering too.
 Hold it, then slide left/right or up/down to adjust playback volume. Its volume
 bar stays for one second after release, then restores song details with a
 subtle fade; the trailing direction arrows are omitted. The mini player has
@@ -77,8 +82,16 @@ Playlist membership and saved files are preserved.
 Each category and playlist shows a recording once. Duplicate IDs, known
 recordings and file identities are collapsed within that collection, including
 playlist imports and restored data. A song can still belong to several playlists.
-Artist pages fetch successive batches of songs as listeners scroll or tap
-Load more, preserve existing rows during failures, and allow retrying a page.
+Artist rows omit song counts. Opening an artist automatically fetches all
+available result pages, displays each provider's songs as they arrive, and
+stops requesting pages when the artist screen closes. Existing rows remain
+visible during failures, with retry for the affected page. Search includes
+72 browse categories covering genres, moods, activities, decades and languages;
+tapping one immediately searches the online providers.
+Home search lists online matches first, followed by songs saved in the library.
+Stream searches online providers only; Library searches its saved/uploaded,
+liked, playlist and device songs; Downloads searches downloaded songs only.
+Changing a query clears old online results while the new search loads.
 Backing out of the keyboard also clears the text field's active focus.
 
 Stream → Upload to Library allows submitting as soon as a category is chosen,

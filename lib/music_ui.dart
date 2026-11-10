@@ -57,6 +57,7 @@ part 'previews_ui.dart';
 part 'song_selection_ui.dart';
 part 'advance_ui.dart';
 part 'mini_player.dart';
+part 'music_browse_categories.dart';
 part 'notification_player_ui.dart';
 part 'song_languages_ui.dart';
 part 'upload_status_ui.dart';
@@ -2650,6 +2651,11 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
     setState(() {
       _loading = true;
       _loadingMore = false;
+      _songs = [];
+      _quickPicks = [];
+      _similar = [];
+      _unavailable = [];
+      _hasMore = false;
     });
     _debounce = Timer(const Duration(milliseconds: 350), () => _load());
   }
@@ -2802,6 +2808,7 @@ class _SpotifyStreamViewState extends State<_SpotifyStreamView> {
                           const SizedBox(height: 12),
                           const Text(
                             'No tracks available. Try another search or refresh.',
+                            textAlign: TextAlign.center,
                           ),
                           TextButton(
                             onPressed: () => _load(refresh: true),
@@ -3035,7 +3042,7 @@ class _QuickPicksGrid extends StatelessWidget {
   );
 }
 
-/// An artist row: round cover, name, song count and a play button.
+/// An artist row: round cover, name and a play button.
 class _ArtistTile extends StatelessWidget {
   const _ArtistTile({required this.artist, required this.onTap});
   final MusicArtistCategory artist;
@@ -3043,8 +3050,6 @@ class _ArtistTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final count = artist.tracks.length;
     final artwork = artist.tracks
         .map((s) => s.artworkUrl)
         .firstWhere((url) => url.isNotEmpty, orElse: () => '');
@@ -3084,29 +3089,14 @@ class _ArtistTile extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    artist.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '$count ${count == 1 ? 'song' : 'songs'}',
-                    maxLines: 1,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
+              child: Text(
+                artist.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
             IconButton(
@@ -3266,6 +3256,79 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
   final _searchController = TextEditingController();
   Timer? _debounce;
 
+  void _browseCategory(String query) {
+    _searchController.text = query;
+    _onSearch(query, immediately: true);
+  }
+
+  void _onSearch(String query, {bool immediately = false}) {
+    context.read<SongSelection?>()?.close();
+    _debounce?.cancel();
+    final music = context.read<MusicController>();
+    music.clearProviderSearch();
+    setState(() {});
+    if (query.trim().isEmpty || music.musicProviders.isEmpty) return;
+    if (immediately) {
+      unawaited(music.searchAllMusic(query));
+    } else {
+      _debounce = Timer(
+        const Duration(milliseconds: 500),
+        () => music.searchAllMusic(query),
+      );
+    }
+  }
+
+  Widget _browse(MusicController music) => CustomScrollView(
+    slivers: [
+      const SliverPadding(
+        padding: EdgeInsets.fromLTRB(20, 8, 20, 14),
+        sliver: SliverToBoxAdapter(
+          child: Text(
+            'Browse Categories',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 80),
+        sliver: SliverGrid.builder(
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 1.6,
+          ),
+          itemCount: _browseCategories.length + music.categories.length,
+          itemBuilder: (context, index) {
+            if (index < _browseCategories.length) {
+              final category = _browseCategories[index];
+              return _SpotifyBrowseCard(
+                title: category.title,
+                colors: _browsePalettes[index % _browsePalettes.length],
+                icon: category.icon,
+                onTap: () => _browseCategory(category.query),
+              );
+            }
+            final category = music.categories[index - _browseCategories.length];
+            return _SpotifyBrowseCard(
+              title: category.name,
+              colors: const [Color(0xFF6366F1), Color(0xFF4338CA)],
+              icon: Icons.music_note_rounded,
+              onTap: () => _push(
+                context,
+                SongListScreen(
+                  title: category.name,
+                  emptyText: 'No songs in this category.',
+                  select: (m) => m.songsIn(category.id),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    ],
+  );
+
   @override
   void dispose() {
     _debounce?.cancel();
@@ -3280,13 +3343,19 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
 
     final searchResults = query.isEmpty
         ? const <Song>[]
-        : music.allMusic.where((s) {
-            return s.title.toLowerCase().contains(query) ||
-                s.artist.toLowerCase().contains(query) ||
+        : music.libraryTracks.where((s) {
+            return '${s.title} ${s.artist} ${s.album}'.toLowerCase().contains(
+                  query,
+                ) ||
                 music.categoryName(s.categoryId).toLowerCase().contains(query);
           }).toList();
-    final onlineSongs = music.visibleSongs(music.providerSongs);
-    final selectableResults = [...searchResults, ...onlineSongs];
+    final hasProviders = music.musicProviders.isNotEmpty;
+    final currentQuery = music.providerQuery.toLowerCase() == query;
+    final onlineSongs = currentQuery
+        ? music.visibleSongs(music.providerSongs)
+        : const <Song>[];
+    final loading = hasProviders && (!currentQuery || music.providerLoading);
+    final selectableResults = [...onlineSongs, ...searchResults];
 
     return Column(
       children: [
@@ -3295,17 +3364,8 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
           child: TextField(
             controller: _searchController,
             textInputAction: TextInputAction.search,
-            onChanged: (val) {
-              context.read<SongSelection?>()?.close();
-              setState(() {});
-              _debounce?.cancel();
-              if (val.trim().isNotEmpty && music.musicProviders.isNotEmpty) {
-                _debounce = Timer(
-                  const Duration(milliseconds: 500),
-                  () => music.searchAllMusic(val),
-                );
-              }
-            },
+            onChanged: _onSearch,
+            onSubmitted: (query) => _onSearch(query, immediately: true),
             decoration: InputDecoration(
               hintText: 'What do you want to listen to?',
               prefixIcon: const Icon(Icons.search_rounded),
@@ -3313,11 +3373,8 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
                   ? IconButton(
                       icon: const Icon(Icons.clear_rounded),
                       onPressed: () {
-                        context.read<SongSelection?>()?.close();
                         _searchController.clear();
-                        _debounce?.cancel();
-                        music.searchAllMusic('');
-                        setState(() {});
+                        _onSearch('');
                       },
                     )
                   : null,
@@ -3326,7 +3383,7 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
         ),
         Expanded(
           child: query.isNotEmpty
-              ? (searchResults.isEmpty && onlineSongs.isEmpty
+              ? (searchResults.isEmpty && onlineSongs.isEmpty && !loading
                     ? Center(
                         child: Text(
                           'No results for "$query"',
@@ -3336,11 +3393,48 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
                     : ListView(
                         padding: const EdgeInsets.only(bottom: 80),
                         children: [
-                          if (searchResults.isNotEmpty) ...[
+                          if (hasProviders) ...[
                             const Padding(
                               padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
                               child: Text(
-                                'Library & Community',
+                                'Online songs',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                            if (loading)
+                              const Padding(
+                                padding: EdgeInsets.all(20),
+                                child: Center(child: _LoadingDots()),
+                              )
+                            else if (onlineSongs.isEmpty)
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  0,
+                                  20,
+                                  12,
+                                ),
+                                child: Text(
+                                  music.providerError ??
+                                      'No online songs found.',
+                                  style: TextStyle(color: _muted(context)),
+                                ),
+                              ),
+                            for (final song in onlineSongs)
+                              SongTile(
+                                song: song,
+                                queue: onlineSongs,
+                                selectionSongs: selectableResults,
+                              ),
+                          ],
+                          if (searchResults.isNotEmpty) ...[
+                            const Padding(
+                              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                              child: Text(
+                                'Library',
                                 style: TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 16,
@@ -3354,138 +3448,9 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
                                 selectionSongs: selectableResults,
                               ),
                           ],
-                          if (onlineSongs.isNotEmpty) ...[
-                            const Padding(
-                              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
-                              child: Text(
-                                'Online Streams',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ),
-                            for (final song in onlineSongs)
-                              SongTile(
-                                song: song,
-                                queue: onlineSongs,
-                                selectionSongs: selectableResults,
-                              ),
-                          ],
                         ],
                       ))
-              : ListView(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 80),
-                  children: [
-                    const Text(
-                      'Browse Categories',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    GridView.count(
-                      crossAxisCount: 2,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                      childAspectRatio: 1.6,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      children: [
-                        _SpotifyBrowseCard(
-                          title: 'Pop & Hits',
-                          colors: const [Color(0xFF8B5CF6), Color(0xFF6D28D9)],
-                          icon: Icons.trending_up_rounded,
-                          onTap: () {
-                            _searchController.text = 'Pop';
-                            setState(() {});
-                          },
-                        ),
-                        _SpotifyBrowseCard(
-                          title: 'Lo-Fi & Chill',
-                          colors: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
-                          icon: Icons.bedtime_rounded,
-                          onTap: () {
-                            _searchController.text = 'Chill';
-                            setState(() {});
-                          },
-                        ),
-                        _SpotifyBrowseCard(
-                          title: 'Hip-Hop',
-                          colors: const [Color(0xFF10B981), Color(0xFF047857)],
-                          icon: Icons.graphic_eq_rounded,
-                          onTap: () {
-                            _searchController.text = 'Hip Hop';
-                            setState(() {});
-                          },
-                        ),
-                        _SpotifyBrowseCard(
-                          title: 'Party Beats',
-                          colors: const [Color(0xFFF59E0B), Color(0xFFD97706)],
-                          icon: Icons.celebration_rounded,
-                          onTap: () {
-                            _searchController.text = 'Party';
-                            setState(() {});
-                          },
-                        ),
-                        _SpotifyBrowseCard(
-                          title: 'Rock & Metal',
-                          colors: const [Color(0xFFEF4444), Color(0xFFB91C1C)],
-                          icon: Icons.bolt_rounded,
-                          onTap: () {
-                            _searchController.text = 'Rock';
-                            setState(() {});
-                          },
-                        ),
-                        _SpotifyBrowseCard(
-                          title: 'Acoustic',
-                          colors: const [Color(0xFFEC4899), Color(0xFFBE185D)],
-                          icon: Icons.favorite_rounded,
-                          onTap: () {
-                            _searchController.text = 'Acoustic';
-                            setState(() {});
-                          },
-                        ),
-                        _SpotifyBrowseCard(
-                          title: 'Bollywood',
-                          colors: const [Color(0xFFA855F7), Color(0xFF7E22CE)],
-                          icon: Icons.radio_rounded,
-                          onTap: () {
-                            _searchController.text = 'Bollywood';
-                            setState(() {});
-                          },
-                        ),
-                        _SpotifyBrowseCard(
-                          title: 'Focus & Study',
-                          colors: const [Color(0xFF06B6D4), Color(0xFF0E7490)],
-                          icon: Icons.auto_stories_rounded,
-                          onTap: () {
-                            _searchController.text = 'Focus';
-                            setState(() {});
-                          },
-                        ),
-                        for (final cat in music.categories)
-                          _SpotifyBrowseCard(
-                            title: cat.name,
-                            colors: const [
-                              Color(0xFF6366F1),
-                              Color(0xFF4338CA),
-                            ],
-                            icon: Icons.music_note_rounded,
-                            onTap: () => _push(
-                              context,
-                              SongListScreen(
-                                title: cat.name,
-                                emptyText: 'No songs in this category.',
-                                select: (m) => m.songsIn(cat.id),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
+              : _browse(music),
         ),
       ],
     );
@@ -3562,20 +3527,11 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
               _ => downloadedSongs,
             }
           : switch (_chip) {
-              'liked' => music.communitySongs(MediaCollection.likedSongs),
+              'liked' => music.likedSongs,
               'downloads' => music.downloadedSongs,
               _ when category != null => music.songsIn(category.id),
               _ when playlist != null => playlist.tracks,
-              _ => {
-                for (final s in [
-                  ...music.songs,
-                  ...music.likedSongs,
-                  ...music.downloadedSongs,
-                  ...music.personal.localTracks.values,
-                  for (final p in playlists) ...p.tracks,
-                ])
-                  s.id: s,
-              }.values.toList(),
+              _ => music.libraryTracks,
             },
     );
     final query = _search.text.trim().toLowerCase();
@@ -3711,13 +3667,17 @@ class _SpotifyLibraryViewState extends State<_SpotifyLibraryView> {
               if (tracks.isEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-                  child: Text(
-                    query.isEmpty
-                        ? widget.downloadsOnly
-                              ? 'Download songs from Stream or Library to play them offline.'
-                              : 'Nothing here yet.'
-                        : 'No songs match "${_search.text.trim()}".',
-                    style: TextStyle(color: _muted(context)),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Text(
+                      query.isEmpty
+                          ? widget.downloadsOnly
+                                ? 'Download songs from Stream or Library to play them offline.'
+                                : 'Nothing here yet.'
+                          : 'No songs match "${_search.text.trim()}".',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: _muted(context)),
+                    ),
                   ),
                 ),
             ],
@@ -5492,8 +5452,145 @@ class _SongEditorScreenState extends State<SongEditorScreen> {
 // Players
 // ─────────────────────────────────────────────────────────────────────────────
 
-class NowPlayingScreen extends StatelessWidget {
+class NowPlayingScreen extends StatefulWidget {
   const NowPlayingScreen({super.key});
+
+  @override
+  State<NowPlayingScreen> createState() => _NowPlayingScreenState();
+}
+
+class _NowPlayingScreenState extends State<NowPlayingScreen>
+    with SingleTickerProviderStateMixin {
+  late final _artMotion = AnimationController.unbounded(vsync: this);
+  final _pendingSwipes = <bool>[];
+  double _swipeStart = 0, _swipeDistance = 0, _dragOrigin = 0;
+  bool _switching = false, _queuedGesture = false;
+  Song? _artSong;
+
+  @override
+  void dispose() {
+    _pendingSwipes.clear();
+    _artMotion.dispose();
+    super.dispose();
+  }
+
+  Future<void> _animateArt(double value) async {
+    if (!mounted) return;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _artMotion.value = value;
+      return;
+    }
+    await _artMotion
+        .animateTo(
+          value,
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOutCubic,
+        )
+        .orCancel;
+  }
+
+  Future<void> _settleArt() async {
+    if (_switching || !mounted) return;
+    try {
+      await _animateArt(0);
+      if (mounted && !_switching) setState(() => _artSong = null);
+    } on TickerCanceled {
+      // A new gesture owns the current animation position.
+    }
+  }
+
+  void _swipeBegin(DragStartDetails details) {
+    _swipeStart = details.globalPosition.dy;
+    _swipeDistance = 0;
+    _queuedGesture = _switching;
+    if (_switching) return;
+    _artMotion.stop();
+    _dragOrigin = _artMotion.value;
+    final music = context.read<MusicController>();
+    setState(() => _artSong = music.current);
+    unawaited(music.playback.warmAdjacent());
+  }
+
+  void _swipeUpdate(DragUpdateDetails details) {
+    _swipeDistance = details.globalPosition.dy - _swipeStart;
+    if (_queuedGesture || _switching) return;
+    _artMotion.value = MediaQuery.disableAnimationsOf(context)
+        ? 0
+        : (_dragOrigin + _swipeDistance * 0.35).clamp(-48.0, 48.0);
+  }
+
+  void _swipeEnd(DragEndDetails details) {
+    final distance = _swipeDistance;
+    _swipeDistance = 0;
+    if (distance.abs() >= 56 ||
+        (distance.abs() >= 18 && (details.primaryVelocity ?? 0).abs() >= 450)) {
+      unawaited(_skip(distance < 0));
+    } else if (!_queuedGesture) {
+      unawaited(_settleArt());
+    }
+    _queuedGesture = false;
+  }
+
+  Future<void> _skip(bool next) async {
+    _pendingSwipes.add(next);
+    if (_switching) return;
+    _switching = true;
+    final music = context.read<MusicController>();
+    try {
+      while (mounted && _pendingSwipes.isNotEmpty) {
+        final direction = _pendingSwipes.removeAt(0);
+        final target = music.playback.queue.swipeTarget(next: direction);
+        if (target == null || !music.allowsSong(target)) {
+          await _animateArt(0);
+          if (mounted) setState(() => _artSong = null);
+          continue;
+        }
+        setState(() => _artSong ??= music.current);
+        final switching = music.playback.swipeTo(target, backwards: !direction);
+        await _animateArt(direction ? -72 : 72);
+        final switched = await switching;
+        if (!mounted) return;
+        if (switched && music.current?.id == target.id) {
+          unawaited(HapticFeedback.selectionClick());
+          setState(() {
+            _artSong = target;
+            _artMotion.value = direction ? 72 : -72;
+          });
+        }
+        await _animateArt(0);
+        if (mounted) setState(() => _artSong = null);
+      }
+    } on TickerCanceled {
+      // Leaving the player cancels visual work, while playback can finish.
+    } catch (_) {
+      _pendingSwipes.clear();
+      if (mounted) {
+        _artMotion.value = 0;
+        setState(() => _artSong = null);
+        music.announce('Could not change tracks. Try again.');
+      }
+    } finally {
+      _switching = false;
+    }
+  }
+
+  Widget _swipeArea({required Widget child, Key? key}) => Listener(
+    key: key,
+    onPointerCancel: (_) {
+      _swipeDistance = 0;
+      _queuedGesture = false;
+      unawaited(_settleArt());
+    },
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
+      onVerticalDragStart: _swipeBegin,
+      onVerticalDragUpdate: _swipeUpdate,
+      onVerticalDragEnd: _swipeEnd,
+      onVerticalDragCancel: () => unawaited(_settleArt()),
+      child: child,
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -5596,257 +5693,261 @@ class NowPlayingScreen extends StatelessWidget {
               title: 'Nothing playing',
               subtitle: 'Pick a song to start listening.',
             )
-          : SafeArea(
-              top: false,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final art = math
-                      .min(
-                        constraints.maxWidth - 48,
-                        constraints.maxHeight * 0.4,
-                      )
-                      .clamp(96.0, 340.0);
-                  return SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minHeight: math.max(0, constraints.maxHeight - 32),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _Thumb(
-                            icon: Icons.music_note_rounded,
-                            size: art,
-                            imageUrl: song.artworkUrl,
-                          ),
-                          SizedBox(
-                            height: 64,
-                            child: song.providerId.startsWith('yt')
-                                ? Center(
-                                    child: FilledButton.tonalIcon(
-                                      onPressed: () =>
-                                          _openSongVideo(context, song),
-                                      icon: const Icon(
-                                        Icons.smart_display_rounded,
-                                        size: 20,
-                                      ),
-                                      label: const Text(
-                                        'Watch Music Video',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: NexMusic.violet
-                                            .withValues(alpha: 0.15),
-                                        foregroundColor: NexMusic.violet,
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 20,
-                                          vertical: 10,
-                                        ),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            24,
-                                          ),
-                                          side: const BorderSide(
-                                            color: NexMusic.violet,
-                                            width: 1.2,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  )
-                                : null,
-                          ),
-                          const SizedBox(height: 24),
-                          Row(
-                            key: const ValueKey('now-playing-details'),
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    Text(
-                                      key: const ValueKey('now-playing-title'),
-                                      song.title,
-                                      maxLines: 1,
-                                      softWrap: false,
-                                      overflow: TextOverflow.ellipsis,
-                                      strutStyle: const StrutStyle(
-                                        fontSize: 22,
-                                        height: 1.35,
-                                        forceStrutHeight: true,
-                                      ),
-                                      style: const TextStyle(
-                                        fontSize: 22,
-                                        height: 1.35,
-                                        fontWeight: FontWeight.w600,
-                                        letterSpacing: -0.3,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      state.category,
-                                      maxLines: 1,
-                                      softWrap: false,
-                                      overflow: TextOverflow.ellipsis,
-                                      strutStyle: const StrutStyle(
-                                        fontSize: 14,
-                                        height: 1.4,
-                                        forceStrutHeight: true,
-                                      ),
-                                      style: TextStyle(
-                                        color: muted,
-                                        fontSize: 14,
-                                        height: 1.4,
-                                      ),
-                                    ),
-                                  ],
-                                ),
+          : _swipeArea(
+              key: const ValueKey('now-playing-gestures'),
+              child: SafeArea(
+                top: false,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final art = math
+                        .min(
+                          constraints.maxWidth - 48,
+                          constraints.maxHeight * 0.4,
+                        )
+                        .clamp(96.0, 340.0);
+                    return SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minHeight: math.max(0, constraints.maxHeight - 32),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            _swipeArea(
+                              key: const ValueKey(
+                                'now-playing-artwork-gestures',
                               ),
-                              SizedBox(
-                                width: 48,
-                                height: 48,
-                                child: song.isPrivate
-                                    ? null
-                                    : IconButton(
-                                        tooltip: state.liked
-                                            ? 'Unlike'
-                                            : 'Like',
-                                        onPressed: () => music.toggleLike(song),
-                                        icon: Icon(
-                                          state.liked
-                                              ? Icons.favorite_rounded
-                                              : Icons.favorite_border_rounded,
-                                          color: state.liked
-                                              ? NexMusic.violet
-                                              : null,
-                                        ),
-                                      ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          ValueListenableBuilder<Duration>(
-                            valueListenable: music.positionListenable,
-                            builder: (context, position, _) {
-                              final max = math
-                                  .max(1, state.duration.inMilliseconds)
-                                  .toDouble();
-                              final value = position.inMilliseconds
-                                  .clamp(0, max.toInt())
-                                  .toDouble();
-                              return Column(
-                                children: [
-                                  SliderTheme(
-                                    data: SliderTheme.of(context).copyWith(
-                                      overlayShape:
-                                          SliderComponentShape.noOverlay,
-                                    ),
-                                    child: Slider(
-                                      key: const ValueKey('now-playing-seek'),
-                                      value: value,
-                                      max: max,
-                                      onChanged: (next) => music.seek(
-                                        Duration(milliseconds: next.round()),
+                              child: SizedBox(
+                                width: double.infinity,
+                                child: AnimatedBuilder(
+                                  animation: _artMotion,
+                                  child: RepaintBoundary(
+                                    child: Center(
+                                      child: _Thumb(
+                                        icon: Icons.music_note_rounded,
+                                        size: art,
+                                        imageUrl: (_artSong ?? song).artworkUrl,
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(height: 8),
-                                  Row(
+                                  builder: (context, child) {
+                                    final offset =
+                                        MediaQuery.disableAnimationsOf(context)
+                                        ? 0.0
+                                        : _artMotion.value;
+                                    return Transform.translate(
+                                      key: const ValueKey(
+                                        'now-playing-artwork-motion',
+                                      ),
+                                      offset: Offset(0, offset),
+                                      child: Opacity(
+                                        opacity: (1 - offset.abs() / 72).clamp(
+                                          0.0,
+                                          1.0,
+                                        ),
+                                        child: child,
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            Row(
+                              key: const ValueKey('now-playing-details'),
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
                                     children: [
                                       Text(
-                                        _time(position),
-                                        style: TextStyle(
-                                          color: muted,
-                                          fontSize: 12,
+                                        key: const ValueKey(
+                                          'now-playing-title',
+                                        ),
+                                        song.title,
+                                        maxLines: 1,
+                                        softWrap: false,
+                                        overflow: TextOverflow.ellipsis,
+                                        strutStyle: const StrutStyle(
+                                          fontSize: 22,
+                                          height: 1.35,
+                                          forceStrutHeight: true,
+                                        ),
+                                        style: const TextStyle(
+                                          fontSize: 22,
+                                          height: 1.35,
+                                          fontWeight: FontWeight.w600,
+                                          letterSpacing: -0.3,
                                         ),
                                       ),
-                                      const Spacer(),
+                                      const SizedBox(height: 4),
                                       Text(
-                                        _time(state.duration),
+                                        state.category,
+                                        maxLines: 1,
+                                        softWrap: false,
+                                        overflow: TextOverflow.ellipsis,
+                                        strutStyle: const StrutStyle(
+                                          fontSize: 14,
+                                          height: 1.4,
+                                          forceStrutHeight: true,
+                                        ),
                                         style: TextStyle(
                                           color: muted,
-                                          fontSize: 12,
+                                          fontSize: 14,
+                                          height: 1.4,
                                         ),
                                       ),
                                     ],
                                   ),
-                                ],
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          Row(
-                            key: const ValueKey('now-playing-controls'),
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              IconButton(
-                                tooltip: 'Shuffle',
-                                onPressed: music.toggleShuffle,
-                                icon: Icon(
-                                  Icons.shuffle_rounded,
-                                  color: state.shuffle
-                                      ? NexMusic.violet
-                                      : muted,
                                 ),
-                              ),
-                              IconButton(
-                                tooltip: 'Previous',
-                                iconSize: 32,
-                                onPressed: music.previous,
-                                icon: const Icon(Icons.skip_previous_rounded),
-                              ),
-                              SizedBox.square(
-                                dimension: 64,
-                                child: IconButton.filled(
-                                  tooltip: state.playing ? 'Pause' : 'Play',
-                                  iconSize: 32,
-                                  style: IconButton.styleFrom(
-                                    backgroundColor: NexMusic.violet,
-                                    foregroundColor: Colors.white,
-                                  ),
-                                  onPressed: music.togglePlay,
-                                  icon: state.loading
-                                      ? const SizedBox.square(
-                                          dimension: 24,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
+                                SizedBox(
+                                  width: 48,
+                                  height: 48,
+                                  child: song.isPrivate
+                                      ? null
+                                      : IconButton(
+                                          tooltip: state.liked
+                                              ? 'Unlike'
+                                              : 'Like',
+                                          onPressed: () =>
+                                              music.toggleLike(song),
+                                          icon: Icon(
+                                            state.liked
+                                                ? Icons.favorite_rounded
+                                                : Icons.favorite_border_rounded,
+                                            color: state.liked
+                                                ? NexMusic.violet
+                                                : null,
                                           ),
-                                        )
-                                      : Icon(
-                                          state.playing
-                                              ? Icons.pause_rounded
-                                              : Icons.play_arrow_rounded,
                                         ),
                                 ),
-                              ),
-                              IconButton(
-                                tooltip: 'Next',
-                                iconSize: 32,
-                                onPressed: music.next,
-                                icon: const Icon(Icons.skip_next_rounded),
-                              ),
-                              IconButton(
-                                tooltip: 'Repeat',
-                                onPressed: music.toggleRepeat,
-                                icon: Icon(
-                                  music.playback.queue.repeat == MusicRepeat.one
-                                      ? Icons.repeat_one_rounded
-                                      : Icons.repeat_rounded,
-                                  color: state.repeat ? NexMusic.violet : muted,
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            ValueListenableBuilder<Duration>(
+                              valueListenable: music.positionListenable,
+                              builder: (context, position, _) {
+                                final max = math
+                                    .max(1, state.duration.inMilliseconds)
+                                    .toDouble();
+                                final value = position.inMilliseconds
+                                    .clamp(0, max.toInt())
+                                    .toDouble();
+                                return Column(
+                                  children: [
+                                    SliderTheme(
+                                      data: SliderTheme.of(context).copyWith(
+                                        overlayShape:
+                                            SliderComponentShape.noOverlay,
+                                      ),
+                                      child: Slider(
+                                        key: const ValueKey('now-playing-seek'),
+                                        value: value,
+                                        max: max,
+                                        onChanged: (next) => music.seek(
+                                          Duration(milliseconds: next.round()),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      children: [
+                                        Text(
+                                          _time(position),
+                                          style: TextStyle(
+                                            color: muted,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        const Spacer(),
+                                        Text(
+                                          _time(state.duration),
+                                          style: TextStyle(
+                                            color: muted,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              key: const ValueKey('now-playing-controls'),
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Shuffle',
+                                  onPressed: music.toggleShuffle,
+                                  icon: Icon(
+                                    Icons.shuffle_rounded,
+                                    color: state.shuffle
+                                        ? NexMusic.violet
+                                        : muted,
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        ],
+                                IconButton(
+                                  tooltip: 'Previous',
+                                  iconSize: 32,
+                                  onPressed: music.previous,
+                                  icon: const Icon(Icons.skip_previous_rounded),
+                                ),
+                                SizedBox.square(
+                                  dimension: 64,
+                                  child: IconButton.filled(
+                                    tooltip: state.playing ? 'Pause' : 'Play',
+                                    iconSize: 32,
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: NexMusic.violet,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    onPressed: music.togglePlay,
+                                    icon: state.loading
+                                        ? const SizedBox.square(
+                                            dimension: 24,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white,
+                                            ),
+                                          )
+                                        : Icon(
+                                            state.playing
+                                                ? Icons.pause_rounded
+                                                : Icons.play_arrow_rounded,
+                                          ),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Next',
+                                  iconSize: 32,
+                                  onPressed: music.next,
+                                  icon: const Icon(Icons.skip_next_rounded),
+                                ),
+                                IconButton(
+                                  tooltip: 'Repeat',
+                                  onPressed: music.toggleRepeat,
+                                  icon: Icon(
+                                    music.playback.queue.repeat ==
+                                            MusicRepeat.one
+                                        ? Icons.repeat_one_rounded
+                                        : Icons.repeat_rounded,
+                                    color: state.repeat
+                                        ? NexMusic.violet
+                                        : muted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
             ),
     );

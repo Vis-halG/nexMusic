@@ -384,20 +384,19 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
   int page = 0, request = 0;
   String? error;
 
-  Future<List<Song>> _artistPage(
+  Future<MusicFeedResult> _artistPage(
     MusicController music,
     Song seed,
-    int nextPage,
-  ) async {
+    int nextPage, {
+    required void Function(List<Song>) onUpdate,
+  }) async {
     final result = await music.discovery.browse(
       query: widget.album ? '${seed.album} ${seed.artist}' : seed.artist,
       page: nextPage,
       limit: 50,
+      onUpdate: (result) => onUpdate(result.songs),
     );
-    if (result.songs.isEmpty && result.unavailable.isNotEmpty) {
-      throw StateError('The music provider is temporarily unavailable.');
-    }
-    return result.songs;
+    return result;
   }
 
   Future<void> load({bool more = false}) async {
@@ -405,74 +404,99 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
     final generation = ++request;
     final music = context.read<MusicController>(), seed = widget.song;
     final account = music.personal;
-    final nextPage = more ? page + 1 : 1;
+    var nextPage = more ? page + 1 : 1;
+    final local = more
+        ? <Song>[]
+        : widget.album
+        ? music.allMusic
+              .where(
+                (s) =>
+                    s.album == seed.album &&
+                    (seed.isLocal || s.artist == seed.artist),
+              )
+              .toList()
+        : music.artistCategories
+                  .where((a) => a.key == seed.artist.trim().toLowerCase())
+                  .firstOrNull
+                  ?.tracks ??
+              <Song>[];
     setState(() {
       busy = true;
       error = null;
+      tracks = mergeMusicResults([tracks, local]);
     });
-    try {
-      final local = more
-          ? <Song>[]
-          : widget.album
-          ? music.allMusic
-                .where(
-                  (s) =>
-                      s.album == seed.album &&
-                      (seed.isLocal || s.artist == seed.artist),
-                )
-                .toList()
-          : music.artistCategories
-                    .where((a) => a.key == seed.artist.trim().toLowerCase())
-                    .firstOrNull
-                    ?.tracks ??
-                <Song>[];
-      final online = seed.isLocal
-          ? <Song>[]
-          : widget.album &&
-                seed.albumId.isNotEmpty &&
-                seed.providerId == 'jiosaavn'
-          ? await music.catalog.album(seed)
-          : await _artistPage(music, seed, nextPage);
+    if (!more) _seenProviderIds.clear();
+    void publish(List<Song> songs) {
       if (!mounted || generation != request || account != music.personal) {
         return;
       }
-      if (!more) _seenProviderIds.clear();
-      final fresh = online
-          .where((s) => !_seenProviderIds.contains(s.id))
-          .toList();
-      _seenProviderIds.addAll(online.map((s) => s.id));
       final artist = normalizeMusicText(seed.artist);
-      final matching = fresh.where(
-        (s) =>
-            widget.album ||
-            songArtistNames(s).any((a) => normalizeMusicText(a) == artist),
-      );
-      final results = mergeMusicResults([
-        if (more) tracks,
-        local,
-        matching.toList(),
-      ]);
-      music.library.rememberSongs(results);
-      setState(() {
-        tracks = results;
-        page = nextPage;
-        busy = false;
-        hasMore = !widget.album && !seed.isLocal && fresh.isNotEmpty;
-      });
+      final matching = songs
+          .where(
+            (song) =>
+                !_seenProviderIds.contains(song.id) &&
+                (widget.album ||
+                    songArtistNames(
+                      song,
+                    ).any((name) => normalizeMusicText(name) == artist)),
+          )
+          .toList();
+      if (matching.isEmpty) return;
+      music.library.rememberSongs(matching);
+      setState(() => tracks = mergeMusicResults([tracks, matching]));
+    }
+
+    try {
+      while (mounted && generation == request && account == music.personal) {
+        final result = seed.isLocal
+            ? const MusicFeedResult([])
+            : widget.album &&
+                  seed.albumId.isNotEmpty &&
+                  seed.providerId == 'jiosaavn'
+            ? MusicFeedResult(await music.catalog.album(seed))
+            : await _artistPage(music, seed, nextPage, onUpdate: publish);
+        if (!mounted || generation != request || account != music.personal) {
+          return;
+        }
+        final fresh = result.songs
+            .where((s) => !_seenProviderIds.contains(s.id))
+            .toList();
+        publish(result.songs);
+        setState(() {
+          if (result.unavailable.isEmpty) {
+            _seenProviderIds.addAll(result.songs.map((s) => s.id));
+            page = nextPage;
+            hasMore = !widget.album && !seed.isLocal && fresh.isNotEmpty;
+          } else {
+            // Keep this page retryable when one source fails, while showing
+            // songs that the other source has already returned.
+            hasMore = true;
+            error = 'Could not load more tracks. Tap to retry.';
+          }
+        });
+        if (error != null || !hasMore) break;
+        nextPage++;
+        // Publish each batch and yield to gestures/rendering before the next
+        // request, including when the provider result is already cached.
+        await Future<void>.delayed(Duration.zero);
+      }
     } catch (_) {
       if (mounted && generation == request) {
         setState(() {
           error = 'Could not load more tracks. Tap to retry.';
-          busy = false;
         });
       }
+    } finally {
+      if (mounted && generation == request) setState(() => busy = false);
     }
   }
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => load());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(load());
+    });
   }
 
   @override
@@ -492,16 +516,17 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
       body: Column(
         children: [
           if (busy) const LinearProgressIndicator(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                '${visible.length} songs${hasMore ? ' · more available' : ''}',
-                style: TextStyle(color: _muted(context), fontSize: 12),
+          if (widget.album)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '${visible.length} songs${hasMore ? ' · more available' : ''}',
+                  style: TextStyle(color: _muted(context), fontSize: 12),
+                ),
               ),
             ),
-          ),
           Expanded(
             child: NotificationListener<ScrollNotification>(
               onNotification: (notification) {
@@ -530,9 +555,9 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
                     );
                   }
                   if (!hasMore) return const SizedBox.shrink();
-                  return TextButton(
-                    onPressed: busy ? null : () => load(more: true),
-                    child: Text(busy ? 'Loading songs…' : 'Load more songs'),
+                  return const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Center(child: Text('Loading songs…')),
                   );
                 },
               ),

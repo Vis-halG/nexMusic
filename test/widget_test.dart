@@ -114,7 +114,8 @@ void main() {
     music.notifyListeners();
     await tester.pump();
     expect(find.text('Video'), findsOneWidget);
-    expect(find.text('Watch Music Video'), findsOneWidget);
+    expect(find.text('Watch Music Video'), findsNothing);
+    expect(find.text('Video'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
     music.dispose();
     await tester.pump();

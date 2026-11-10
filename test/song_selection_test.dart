@@ -13,6 +13,7 @@ import 'package:nex_music/music_ui.dart';
 import 'package:nex_music/song_selection.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'music_discovery_test.dart' show FakeMusicProvider;
 
 Song _song(String id, {bool video = false}) => Song(
   id: id,
@@ -462,12 +463,15 @@ void main() {
   );
 
   testWidgets(
-    'search Select all includes community and online results and resets on query change',
+    'search Select all includes library and online results and resets on query change',
     (tester) async {
       _phone(tester);
-      final music = await _music()
-        ..songs = [_song('a')]
-        ..providerSongs = [_song('b')];
+      SharedPreferences.setMockInitialValues({});
+      final music = MusicController(
+        await SharedPreferences.getInstance(),
+        player: _SelectionPlayer(),
+        musicProvider: FakeMusicProvider('jiosaavn', [_song('b')]),
+      )..songs = [_song('a')];
       await tester.pumpWidget(_app(music, const SearchScreen()));
       await tester.enterText(find.byType(TextField), 'Track a');
       await tester.pumpAndSettle();
