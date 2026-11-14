@@ -1215,7 +1215,12 @@ class MusicDownloadsScreen extends StatelessWidget {
                   if (job.status == MusicDownloadStatus.downloading)
                     Row(
                       children: [
-                        const _LoadingDots(size: 24),
+                        SizedBox(
+                          width: 90,
+                          child: _ProgressBar(
+                            value: job.total > 0 ? job.progress : null,
+                          ),
+                        ),
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(

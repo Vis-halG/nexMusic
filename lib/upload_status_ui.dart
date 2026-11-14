@@ -112,15 +112,17 @@ class UploadStatusHost extends StatelessWidget {
                                       ),
                                     ),
                                     if (loading || (progress != null && !error))
-                                      SizedBox(
-                                        height: 24,
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 5),
                                         child: Row(
                                           children: [
-                                            if (loading)
-                                              const _LoadingDots(size: 24),
+                                            Expanded(
+                                              child: _ProgressBar(
+                                                value: progress,
+                                              ),
+                                            ),
                                             if (progress != null && !error) ...[
-                                              if (loading)
-                                                const SizedBox(width: 8),
+                                              const SizedBox(width: 8),
                                               Text(
                                                 '${(progress.clamp(0, 1) * 100).round()}%',
                                                 style: TextStyle(

@@ -42,6 +42,7 @@ import 'song_selection.dart';
 import 'music_sharing.dart';
 import 'phone_services.dart';
 import 'container_route.dart';
+import 'tab_stage.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:path_provider/path_provider.dart';
@@ -586,11 +587,21 @@ class _UpdateDownloadBar extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (download.state != UpdateDownloadState.ready)
-                _LoadingDots(
-                  size: 28,
-                  color: waiting ? scheme.outline : NexMusic.violet,
-                ),
+              // The bar keeps its slot after finishing, so the row below it
+              // never shifts.
+              SizedBox(
+                height: _ProgressBar._height,
+                child:
+                    download.state == UpdateDownloadState.ready ||
+                        download.state == UpdateDownloadState.failed
+                    ? null
+                    : _ProgressBar(
+                        value: download.state == UpdateDownloadState.verifying
+                            ? null
+                            : download.fraction,
+                        color: waiting ? scheme.outline : NexMusic.violet,
+                      ),
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 4, 8),
                 child: Row(
@@ -1110,6 +1121,38 @@ class _LoadingDotsState extends State<_LoadingDots>
       );
     },
   );
+}
+
+/// Smooth progress for work with a measurable amount. A null value means the
+/// transfer has started but its total size is not known yet.
+class _ProgressBar extends StatelessWidget {
+  const _ProgressBar({this.value, this.color = NexMusic.violet});
+
+  static const _height = 4.0;
+
+  final double? value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = value?.clamp(0.0, 1.0).toDouble();
+    Widget bar(double? animated) => LinearProgressIndicator(
+      value: animated,
+      minHeight: _height,
+      color: color,
+      backgroundColor: color.withValues(alpha: 0.14),
+      borderRadius: BorderRadius.circular(_height),
+    );
+    if (progress == null) return bar(null);
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: progress),
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, _) => bar(value),
+    );
+  }
 }
 
 /// A fixed-height loading area. It fades the shared dots without making the
@@ -1657,7 +1700,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
             _push(context, const NexBrowserScreen(sharedLink: ''));
           }
         case 'downloads':
-          setState(() => _currentTabIndex = 3);
+          _showTab(3);
       }
     });
   }
@@ -1672,6 +1715,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
   }
 
   int _currentTabIndex = 0;
+  final _visitedTabs = <int>{0};
   var _streamKey = GlobalKey<_SpotifyStreamViewState>();
   final _homeKey = GlobalKey<_SpotifyHomeViewState>();
   final _libraryKey = GlobalKey<_SpotifyLibraryViewState>();
@@ -1679,6 +1723,14 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
   _SpotifyStreamView? _streamView;
   Object? _streamAccount;
   bool _streamVisited = false;
+
+  void _showTab(int index) {
+    if (index == _currentTabIndex) return;
+    // Hidden tabs stay mounted, so a search field there must not keep the
+    // keyboard open over the tab being shown.
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _currentTabIndex = index);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1707,30 +1759,30 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
       _streamKey = GlobalKey<_SpotifyStreamViewState>();
       _streamView = _SpotifyStreamView(key: _streamKey);
     }
+    _visitedTabs.add(_currentTabIndex);
     if (_currentTabIndex == 1) _streamVisited = true;
-    final Widget currentView = switch (_currentTabIndex) {
-      1 => const SizedBox.shrink(),
-      2 => _SpotifyLibraryView(key: _libraryKey),
-      3 => _SpotifyLibraryView(key: _downloadsKey, downloadsOnly: true),
-      4 => const ProfileScreen(showAppBar: false),
-      _ => _SpotifyHomeView(key: _homeKey),
-    };
+    final views = <Widget>[
+      _SpotifyHomeView(key: _homeKey),
+      _streamVisited ? _streamView! : const SizedBox.shrink(),
+      _visitedTabs.contains(2)
+          ? _SpotifyLibraryView(key: _libraryKey)
+          : const SizedBox.shrink(),
+      _visitedTabs.contains(3)
+          ? _SpotifyLibraryView(key: _downloadsKey, downloadsOnly: true)
+          : const SizedBox.shrink(),
+      _visitedTabs.contains(4)
+          ? const ProfileScreen(showAppBar: false)
+          : const SizedBox.shrink(),
+    ];
 
     return _SongSelectionScaffold(
-      key: ValueKey(_currentTabIndex),
+      selectionScope: _currentTabIndex,
       body: SafeArea(
         bottom: false,
         child: Stack(
           children: [
-            if (_currentTabIndex != 1) currentView,
-            if (_streamVisited)
-              Offstage(
-                offstage: _currentTabIndex != 1,
-                child: TickerMode(
-                  enabled: _currentTabIndex == 1,
-                  child: _streamView!,
-                ),
-              ),
+            for (var index = 0; index < views.length; index++)
+              TabStage(active: _currentTabIndex == index, child: views[index]),
           ],
         ),
       ),
@@ -1747,9 +1799,7 @@ class _MusicShellState extends State<MusicShell> with WidgetsBindingObserver {
           const MiniPlayer(),
           NavigationBar(
             selectedIndex: _currentTabIndex,
-            onDestinationSelected: (index) {
-              setState(() => _currentTabIndex = index);
-            },
+            onDestinationSelected: _showTab,
             backgroundColor: Theme.of(context).colorScheme.surface,
             elevation: 8,
             indicatorColor: NexMusic.violet.withValues(alpha: 0.18),
@@ -4148,10 +4198,7 @@ Future<void> _cleanUpSongNames(BuildContext context) async {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: _LoadingDots(),
-                ),
+                _ProgressBar(value: value),
                 const SizedBox(height: 12),
                 Text('${(value * 100).round()}% · Keep the app open.'),
               ],
@@ -4624,7 +4671,7 @@ class _UploadScreenState extends State<UploadScreen> {
               (_streamBusy || _streamError != null)) ...[
             Text(_streamError ?? 'Preparing audio for your Library...'),
             const SizedBox(height: 8),
-            if (_streamBusy) const Center(child: _LoadingDots()),
+            if (_streamBusy) _ProgressBar(value: _streamJob?.progress),
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
@@ -4809,7 +4856,14 @@ class _UploadScreenState extends State<UploadScreen> {
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 8),
-                _LoadingSlot(active: uploading),
+                SizedBox(
+                  height: 12,
+                  child: AnimatedOpacity(
+                    opacity: uploading ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: _ProgressBar(value: music.uploadFraction),
+                  ),
+                ),
                 const SizedBox(height: 8),
                 Text(
                   uploading
@@ -4996,7 +5050,7 @@ class _FetchBox extends StatelessWidget {
             Row(
               children: [
                 if (error == null)
-                  const _LoadingDots(size: 24)
+                  const Icon(Icons.downloading_rounded, color: NexMusic.violet)
                 else
                   Icon(Icons.error_outline_rounded, color: scheme.error),
                 const SizedBox(width: 12),
@@ -5023,6 +5077,10 @@ class _FetchBox extends StatelessWidget {
                 ),
               ],
             ),
+            if (error == null) ...[
+              const SizedBox(height: 10),
+              _ProgressBar(value: job.fraction),
+            ],
             if (error != null) ...[
               const SizedBox(height: 12),
               Row(
@@ -5147,7 +5205,7 @@ class _UploadRow extends StatelessWidget {
         item.error ?? 'Waiting',
       ),
       UploadStatus.uploading => (
-        const _LoadingDots(size: 24),
+        const Icon(Icons.cloud_upload_outlined, color: NexMusic.violet),
         '${(item.progress * 100).round()}%',
       ),
       UploadStatus.done => (
@@ -5174,6 +5232,9 @@ class _UploadRow extends StatelessWidget {
       dense: true,
       leading: SizedBox(width: 28, child: Center(child: icon)),
       title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: item.status == UploadStatus.uploading
+          ? SizedBox(width: 72, child: _ProgressBar(value: item.progress))
+          : null,
       subtitle: Text(
         '$status · ${_fileSize(item.sizeBytes)}',
         maxLines: 2,
@@ -9010,9 +9071,9 @@ class _NexBrowserScreenState extends State<NexBrowserScreen> {
             ),
         ],
         bottom: _progress > 0 && _progress < 100
-            ? const PreferredSize(
-                preferredSize: Size.fromHeight(24),
-                child: Center(child: _LoadingDots(size: 24)),
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(4),
+                child: _ProgressBar(value: _progress / 100),
               )
             : null,
       ),

@@ -165,6 +165,44 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('switching tabs ends a selection and hides the keyboard', (
+    tester,
+  ) async {
+    _usePhone(tester, const Size(1080, 2340));
+    final controller = await _controller()
+      ..signedIn = true
+      ..categories = _categories
+      ..songs = _songs;
+    Finder tab(String label) => find.descendant(
+      of: find.byType(NavigationBar),
+      matching: find.text(label),
+    );
+
+    await tester.pumpWidget(_app(controller));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('Tum Hi Ho').first);
+    await tester.pumpAndSettle();
+    expect(find.text('1 song selected'), findsOneWidget);
+
+    await tester.tap(tab('Library'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Cancel selection'), findsNothing);
+    await tester.tap(find.widgetWithText(TextField, 'Search your library'));
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+
+    await tester.tap(tab('Home'));
+    await tester.pumpAndSettle();
+    expect(tester.testTextInput.isVisible, isFalse);
+    expect(find.byTooltip('Cancel selection'), findsNothing);
+    expect(find.text('Tum Hi Ho'), findsWidgets);
+    expect(find.text('Search your library'), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  });
+
   testWidgets('anyone can edit or delete an upload from its menu', (
     tester,
   ) async {

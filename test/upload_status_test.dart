@@ -95,7 +95,15 @@ void main() {
       await tester.pump();
       expect(find.text('Downloading audio…'), findsOneWidget);
       expect(find.text('40%'), findsOneWidget);
-      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      expect(
+        tester
+            .widget<LinearProgressIndicator>(
+              find.byType(LinearProgressIndicator),
+            )
+            .value,
+        closeTo(0.4, 0.01),
+      );
       expect(find.byType(CircularProgressIndicator), findsNothing);
       job.cancel();
       final item =

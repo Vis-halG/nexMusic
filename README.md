@@ -4,7 +4,7 @@ Flutter app for shared music, online songs and music videos.
 Signed-in listeners can upload audio songs into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.20+8043` has five tabs: Home, Stream, Library, Downloads and Profile. Home
+Version `0.4.21+8044` has five tabs: Home, Stream, Library, Downloads and Profile. Home
 groups public songs and videos into global recently played/watched, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and an Artists chip that lists the people in the For
@@ -77,8 +77,11 @@ icon background in both system themes; no dark badge or welcome-logo shadow.
 Now Playing titles stay on one line with an ellipsis; the details, seek bar and
 transport controls keep their positions when songs or providers change.
 Tapping the mini player expands its pill surface into the full player and
-reverses that transformation on Back. Other app pages share a gentle
-fade/scale entrance. Reduced motion skips these transitions.
+reverses that transformation on Back. Other app pages use a short, minimal
+fade/scale entrance. Tab surfaces stay mounted and use a subtle 160 ms
+fade/slide on every switch, preserving their scroll state without a direct
+jump. Switching tabs closes the keyboard and any song selection. Reduced motion
+skips these transitions.
 
 Profile → Song languages selects the languages visible and playable throughout
 the app, defaulting to Hindi and English. Preferences persist per account and
@@ -94,9 +97,10 @@ Artist rows omit song counts. Opening an artist automatically fetches all
 available result pages and appends each provider's songs without reordering or
 rebuilding the rows already on screen, so the scroll position stays anchored.
 It stops requesting pages when the artist screen closes. Existing rows remain
-visible during failures, with retry for the affected page. Loading surfaces use
-the same compact three-dot indicator in fixed-height slots to avoid layout
-jumps. Search includes
+visible during failures, with retry for the affected page. Indeterminate waits
+use compact three-dot indicators, while updates, uploads, conversions and
+downloads with measurable progress use smooth progress bars. Fixed-height slots
+avoid layout jumps. Search includes
 72 browse categories covering genres, moods, activities, decades and languages;
 tapping one immediately searches the online providers.
 Opening Search from Home focuses the field and shows the keyboard immediately;

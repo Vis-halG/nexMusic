@@ -13,9 +13,13 @@ class NexPageRoute<T> extends PageRouteBuilder<T> {
          opaque: true,
          transitionDuration: reducedMotion
              ? Duration.zero
+             : origin == null
+             ? const Duration(milliseconds: 180)
              : const Duration(milliseconds: 420),
          reverseTransitionDuration: reducedMotion
              ? Duration.zero
+             : origin == null
+             ? const Duration(milliseconds: 150)
              : const Duration(milliseconds: 320),
          pageBuilder: (context, animation, secondary) => builder(context),
          transitionsBuilder: (context, animation, secondary, child) {
@@ -33,7 +37,7 @@ class NexPageRoute<T> extends PageRouteBuilder<T> {
                      CurveTween(curve: Curves.easeOutCubic),
                    ),
                    child: Transform.scale(
-                     scale: 0.985 + 0.015 * progress,
+                     scale: 0.995 + 0.005 * progress,
                      alignment: Alignment.bottomCenter,
                      child: page,
                    ),

@@ -21,17 +21,21 @@ Widget _songCheckbox(BuildContext context, Song song, List<Song> queue) {
 /// Keeps selection local to this route and resets it when the account changes.
 class _SongSelectionScaffold extends StatelessWidget {
   const _SongSelectionScaffold({
-    super.key,
     this.songs,
     this.playlistId,
     this.appBar,
     required this.body,
     this.bottomNavigationBar,
     this.floatingActionButton,
+    this.selectionScope,
   });
 
   final List<Song>? songs;
   final String? playlistId;
+
+  /// Changing this, such as switching shell tabs, ends a selection that is
+  /// not busy, because its songs belong to the content being left.
+  final Object? selectionScope;
   final PreferredSizeWidget? appBar;
   final Widget body;
   final Widget? bottomNavigationBar, floatingActionButton;
@@ -58,6 +62,11 @@ class _SongSelectionHostState extends State<_SongSelectionHost> {
   void didUpdateWidget(_SongSelectionHost oldWidget) {
     super.didUpdateWidget(oldWidget);
     selection.updateSongs(widget.scaffold.songs);
+    if (widget.scaffold.selectionScope != oldWidget.scaffold.selectionScope &&
+        selection.active &&
+        !selection.busy) {
+      selection.close();
+    }
   }
 
   @override
@@ -417,7 +426,10 @@ class _SongSelectionBarState extends State<_SongSelectionBar> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const _LoadingDots(size: 24),
+                    SizedBox(
+                      width: 140,
+                      child: _ProgressBar(value: _shareFraction),
+                    ),
                     if (_shareFraction != null) ...[
                       const SizedBox(width: 8),
                       Text('${(_shareFraction!.clamp(0, 1) * 100).round()}%'),
