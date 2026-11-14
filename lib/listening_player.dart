@@ -309,12 +309,24 @@ class ListeningPlayer extends ChangeNotifier {
     List<Song>? from,
     Duration initialPosition = Duration.zero,
     bool recordHistory = true,
+    bool preservePlaybackState = false,
+    bool Function()? isCurrent,
   }) async {
-    if (song.isVideo || _disposed || !_allowed(song)) return false;
-    _playRequested = true;
+    if (song.isVideo ||
+        _disposed ||
+        !_allowed(song) ||
+        !(isCurrent?.call() ?? true)) {
+      return false;
+    }
+    _playRequested = preservePlaybackState ? _player.playing : true;
     if (!_recovering) _recoveryAttempts.remove(song.id);
     from = from?.where(_allowed).toList();
     final generation = ++_generation;
+    bool current() =>
+        generation == _generation &&
+        !_disposed &&
+        _allowed(song) &&
+        (isCurrent?.call() ?? true);
     _manualGeneration = generation;
     _fading = false;
     notifyListeners();
@@ -322,7 +334,7 @@ class ListeningPlayer extends ChangeNotifier {
     try {
       _cancelStandbyErrors();
       await _standby?.dispose();
-      if (generation != _generation || _disposed) return false;
+      if (!current()) return false;
       _standby = null;
       _preparedId = null;
       final ready = _canReuseSources && from == null
@@ -334,20 +346,9 @@ class ListeningPlayer extends ChangeNotifier {
       final source = ready != null
           ? AudioSource.uri(ready.uri, headers: ready.headers, tag: song)
           : await _source(song);
-      if (generation != _generation || _disposed || !_allowed(song)) {
-        return false;
-      }
+      if (!current()) return false;
       final switched = await _editSources(() async {
-        if (generation != _generation || _disposed || !_allowed(song)) {
-          return false;
-        }
-        previousQueue = queue.toJson();
-        _flush(
-          skipped:
-              queue.currentId != null &&
-              queue.currentId != song.id &&
-              position.value.inSeconds < 30,
-        );
+        if (!current()) return false;
         final preparedIndex = _canReuseSources && from == null
             ? _player.audioSources.indexWhere(
                 (s) =>
@@ -356,13 +357,21 @@ class ListeningPlayer extends ChangeNotifier {
                     (s.tag as Song).id == song.id,
               )
             : -1;
+        await _player.setVolume(_volume * _sleepGain);
+        await _player.setSpeed(song.isLongform ? speed : 1);
+        if (!current()) return false;
+        previousQueue = queue.toJson();
+        _flush(
+          skipped:
+              queue.currentId != null &&
+              queue.currentId != song.id &&
+              position.value.inSeconds < 30,
+        );
         if (from != null || !queue.tracks.any((s) => s.id == song.id)) {
           queue.replace(from ?? [song], song);
         } else {
           queue.select(song, record: recordHistory);
         }
-        await _player.setVolume(_volume * _sleepGain);
-        await _player.setSpeed(song.isLongform ? speed : 1);
         if (preparedIndex >= 0) {
           await _player.seek(initialPosition, index: preparedIndex);
         } else {
@@ -371,38 +380,43 @@ class ListeningPlayer extends ChangeNotifier {
             source,
           ], initialPosition: initialPosition);
         }
-        if (generation != _generation || _disposed || !_allowed(song)) {
-          return false;
-        }
+        if (!current()) return false;
         await _player.setLoopMode(
           queue.repeat == MusicRepeat.one ? LoopMode.one : LoopMode.off,
         );
-        if (generation != _generation || _disposed || !_allowed(song)) {
-          return false;
-        }
+        if (!current()) return false;
         onTrack(song);
         _reloadNeeded = false;
         onQueueSaved?.call();
-        unawaited(_startPlayer(_player, generation));
+        if (!current()) return false;
+        if (_playRequested && !_player.playing) {
+          unawaited(_startPlayer(_player, generation));
+        }
         return true;
       });
       if (switched) {
         unawaited(_prepareNext());
         unawaited(warmAdjacent());
+      } else if (generation == _generation && !_disposed) {
+        await _restoreAfterFailedSwitch(generation, previousQueue);
       }
       return switched;
     } on PlayerInterruptedException {
       if (generation == _generation && !_disposed) {
         await _restoreAfterFailedSwitch(generation, previousQueue);
-        onError('Track change was interrupted. Please swipe again.');
+        if (isCurrent?.call() ?? true) {
+          onError('Track change was interrupted. Please swipe again.');
+        }
       }
       return false;
     } catch (_) {
       if (generation == _generation && !_disposed) {
         await _restoreAfterFailedSwitch(generation, previousQueue);
-        onError(
-          'This track could not play. Check the connection or local file, then retry.',
-        );
+        if (isCurrent?.call() ?? true) {
+          onError(
+            'This track could not play. Check the connection or local file, then retry.',
+          );
+        }
       }
       return false;
     } finally {
@@ -427,17 +441,28 @@ class ListeningPlayer extends ChangeNotifier {
     });
   }
 
-  /// A confirmed manual step, separate from automatic queue-end behaviour.
-  Future<bool> swipeTo(Song song, {required bool backwards}) async {
+  /// A confirmed manual step that preserves the transport state. A newer
+  /// preview can invalidate a pending source lookup before it changes audio.
+  Future<bool> swipeTo(
+    Song song, {
+    required bool backwards,
+    bool Function()? isCurrent,
+  }) async {
     await _advanceDone?.future;
     if (_disposed ||
         !_allowed(song) ||
+        !(isCurrent?.call() ?? true) ||
         song.id == queue.currentId ||
         !queue.tracks.any((s) => s.id == song.id)) {
       return false;
     }
     final history = List<String>.of(queue.history);
-    final switched = await play(song, recordHistory: !backwards);
+    final switched = await play(
+      song,
+      recordHistory: !backwards,
+      preservePlaybackState: true,
+      isCurrent: isCurrent,
+    );
     if (switched && backwards) {
       final previousIndex = history.lastIndexOf(song.id);
       queue.history

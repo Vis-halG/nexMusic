@@ -233,7 +233,7 @@ class _MusicDiscoveryScreenState extends State<MusicDiscoveryScreen> {
               ],
             ),
           ),
-          if (busy) const LinearProgressIndicator(),
+          _LoadingSlot(active: busy, height: 40),
           if (error != null)
             Padding(padding: const EdgeInsets.all(16), child: Text(error!)),
           Expanded(
@@ -379,10 +379,22 @@ class ArtistAlbumScreen extends StatefulWidget {
 
 class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
   List<Song> tracks = [];
+  final _displayedRecordings = MusicRecordingIndex<Song>((song) => song);
   final _seenProviderIds = <String>{};
   bool busy = false, hasMore = true;
   int page = 0, request = 0;
   String? error;
+
+  List<Song> _appendTracks(Iterable<Song> songs) {
+    final added = <Song>[];
+    for (final song in songs) {
+      if (_displayedRecordings.contains(song)) continue;
+      _displayedRecordings.add(song);
+      added.add(song);
+    }
+    if (added.isNotEmpty) tracks = [...tracks, ...added];
+    return added;
+  }
 
   Future<MusicFeedResult> _artistPage(
     MusicController music,
@@ -423,7 +435,7 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
     setState(() {
       busy = true;
       error = null;
-      tracks = mergeMusicResults([tracks, local]);
+      _appendTracks(local);
     });
     if (!more) _seenProviderIds.clear();
     void publish(List<Song> songs) {
@@ -441,9 +453,12 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
                     ).any((name) => normalizeMusicText(name) == artist)),
           )
           .toList();
-      if (matching.isEmpty) return;
-      music.library.rememberSongs(matching);
-      setState(() => tracks = mergeMusicResults([tracks, matching]));
+      // Provider callbacks can repeat an entire page. Append only genuinely
+      // new recordings so existing rows never move or change identity.
+      final added = _appendTracks(matching);
+      if (added.isEmpty) return;
+      music.library.rememberSongs(added);
+      setState(() {});
     }
 
     try {
@@ -508,6 +523,11 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
   @override
   Widget build(BuildContext context) {
     final visible = context.watch<MusicController>().visibleSongs(tracks);
+    final rowIndices = {
+      for (var i = 0; i < visible.length; i++)
+        'artist-track:${visible[i].id}': i,
+      'artist-footer': visible.length,
+    };
     return _SongSelectionScaffold(
       songs: visible,
       appBar: AppBar(
@@ -515,7 +535,6 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
       ),
       body: Column(
         children: [
-          if (busy) const LinearProgressIndicator(),
           if (widget.album)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
@@ -528,39 +547,37 @@ class _ArtistAlbumScreenState extends State<ArtistAlbumScreen> {
               ),
             ),
           Expanded(
-            child: NotificationListener<ScrollNotification>(
-              onNotification: (notification) {
-                if (notification.depth == 0 &&
-                    notification.metrics.axis == Axis.vertical &&
-                    notification.metrics.pixels > 0 &&
-                    notification.metrics.extentAfter < 450 &&
-                    !busy &&
-                    hasMore &&
-                    error == null) {
-                  load(more: true);
-                }
-                return false;
-              },
-              child: ListView.builder(
-                padding: const EdgeInsets.only(bottom: 80),
-                itemCount: visible.length + 1,
-                itemBuilder: (_, i) {
-                  if (i < visible.length) {
-                    return _discoveryTile(context, visible[i], visible);
-                  }
-                  if (error != null) {
-                    return TextButton(
-                      onPressed: () => load(more: page > 0),
-                      child: Text(error!),
-                    );
-                  }
-                  if (!hasMore) return const SizedBox.shrink();
-                  return const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(child: Text('Loading songs…')),
+            child: ListView.builder(
+              key: const ValueKey('artist-tracks'),
+              padding: const EdgeInsets.only(bottom: 80),
+              itemCount: visible.length + 1,
+              findChildIndexCallback: (key) =>
+                  key is ValueKey<String> ? rowIndices[key.value] : null,
+              itemBuilder: (_, i) {
+                if (i < visible.length) {
+                  return KeyedSubtree(
+                    key: ValueKey('artist-track:${visible[i].id}'),
+                    child: _discoveryTile(context, visible[i], visible),
                   );
-                },
-              ),
+                }
+                // Keep the footer's extent when loading completes, avoiding
+                // a scroll correction while the listener is near the bottom.
+                return SizedBox(
+                  key: const ValueKey('artist-footer'),
+                  height: 56,
+                  child: error != null
+                      ? TextButton(
+                          onPressed: () => load(more: page > 0),
+                          child: Text(error!),
+                        )
+                      : busy
+                      ? const Center(
+                          key: ValueKey('artist-loading'),
+                          child: _LoadingDots(),
+                        )
+                      : null,
+                );
+              },
             ),
           ),
         ],

@@ -305,7 +305,7 @@ void main() {
       ];
 
     await tester.pumpWidget(_app(controller, home: const UploadScreen()));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('Upload finished'), findsOneWidget);
     expect(find.text('3 of 3 processed'), findsOneWidget);
@@ -527,21 +527,22 @@ void main() {
       ];
 
     await tester.pumpWidget(_app(controller, home: const UploadScreen()));
-    await tester.pumpAndSettle();
+    // The shared three-dot loader intentionally keeps animating.
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Uploading'), findsOneWidget);
 
     await tester.tap(find.text('Pause'));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(controller.uploadsPaused, isTrue);
     expect(find.text('Uploads paused'), findsOneWidget);
     expect(find.text('Resume'), findsOneWidget);
 
     // Cancelling asks first, then stops the songs not yet sent.
     await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Stop uploading?'), findsOneWidget);
     await tester.tap(find.text('Stop'));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(controller.uploads.last.status, UploadStatus.cancelled);
     expect(controller.uploadsPaused, isFalse);
     expect(find.textContaining('Cancelled'), findsOneWidget);

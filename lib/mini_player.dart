@@ -29,6 +29,23 @@ class _MiniPlayerState extends State<MiniPlayer>
       _queuedGesture = false;
   _MiniTrack? _departing;
   Song? _target;
+  late final _PlayerSwipePreview _swipes;
+
+  @override
+  void initState() {
+    super.initState();
+    _swipes = _PlayerSwipePreview(context.read<MusicController>(), () {
+      if (!mounted) return;
+      setState(() {
+        if (!_swipes.active) {
+          _pendingSwipes.clear();
+          _departing = null;
+          _target = null;
+          _motion.value = 0;
+        }
+      });
+    });
+  }
 
   Duration get _duration => MediaQuery.disableAnimationsOf(context)
       ? Duration.zero
@@ -48,6 +65,7 @@ class _MiniPlayerState extends State<MiniPlayer>
 
   @override
   void dispose() {
+    _swipes.dispose();
     _volumeDismiss?.cancel();
     _pendingSwipes.clear();
     _motion.dispose();
@@ -91,7 +109,8 @@ class _MiniPlayerState extends State<MiniPlayer>
     final music = context.read<MusicController>();
     setState(() {
       _showVolume = false;
-      _departing = music.current == null ? null : _track(music, music.current!);
+      final song = _swipes.song ?? music.current;
+      _departing = song == null ? null : _track(music, song);
       _target = null;
     });
     unawaited(music.playback.warmAdjacent());
@@ -100,8 +119,7 @@ class _MiniPlayerState extends State<MiniPlayer>
   void _swipeUpdate(DragUpdateDetails details) {
     _swipeDistance = details.globalPosition.dy - _swipeStart;
     if (_queuedGesture || _draining) return;
-    final music = context.read<MusicController>();
-    final target = music.playback.queue.swipeTarget(next: _swipeDistance < 0);
+    final target = _swipes.target(_swipeDistance < 0);
     if (_target?.id != target?.id) setState(() => _target = target);
     final limit = _cardHeight * (target == null ? 0.18 : 0.85);
     _motion.value = MediaQuery.disableAnimationsOf(context)
@@ -129,12 +147,14 @@ class _MiniPlayerState extends State<MiniPlayer>
     _pendingSwipes.add(next);
     if (_draining) return;
     _draining = true;
+    _swipes.animating(true);
     _volumeDismiss?.cancel();
     final music = context.read<MusicController>();
     try {
       while (mounted && _pendingSwipes.isNotEmpty) {
         final direction = _pendingSwipes.removeAt(0);
-        final target = music.playback.queue.swipeTarget(next: direction);
+        final previous = _swipes.song ?? music.current;
+        final target = _swipes.target(direction);
         if (target == null ||
             !music.allowsSong(target) ||
             music.current == null) {
@@ -148,16 +168,15 @@ class _MiniPlayerState extends State<MiniPlayer>
           continue;
         }
         setState(() {
-          _departing ??= _track(music, music.current!);
+          _departing ??= _track(music, previous!);
           _target = target;
           _showVolume = false;
         });
-        final switching = music.playback.swipeTo(target, backwards: !direction);
+        _swipes.step(direction);
+        _swipes.release();
         await _animate((direction ? -1 : 1) * _cardHeight);
-        final switched = await switching;
         if (!mounted) return;
-        if (switched && music.current?.id == target.id) {
-          unawaited(HapticFeedback.selectionClick());
+        if (_swipes.song?.id == target.id) {
           setState(() {
             _departing = null;
             _target = null;
@@ -186,6 +205,7 @@ class _MiniPlayerState extends State<MiniPlayer>
       }
     } finally {
       _draining = false;
+      _swipes.animating(false);
     }
   }
 
@@ -288,8 +308,10 @@ class _MiniPlayerState extends State<MiniPlayer>
       66.0,
       textScaler.scale(13) * 1.5 + textScaler.scale(11) * 1.5 + 18,
     );
-    final foreground = _departing ?? _track(music, song);
-    final behind = _target ?? state.next ?? state.previous;
+    final foreground = _departing ?? _track(music, _swipes.song ?? song);
+    final behind =
+        _target ??
+        (_swipes.active ? _swipes.target(true) : state.next ?? state.previous);
     // Keep artwork and text outside the per-frame animation builder. Only
     // the two card layers move; provider updates still refresh their state.
     final upcoming = behind == null
@@ -328,6 +350,7 @@ class _MiniPlayerState extends State<MiniPlayer>
         child: InkWell(
           onTap: () {
             if (_draining || _departing != null) return;
+            _swipes.cancel();
             if (_showVolume) {
               _volumeDismiss?.cancel();
               setState(() => _showVolume = false);
@@ -364,7 +387,10 @@ class _MiniPlayerState extends State<MiniPlayer>
                       liked: foreground.liked,
                       loading: foreground.loading,
                       onLike: () => music.toggleLike(foreground.song),
-                      onPlay: music.togglePlay,
+                      onPlay: () {
+                        _swipes.cancel();
+                        music.togglePlay();
+                      },
                     ),
                   ),
           ),
@@ -387,7 +413,10 @@ class _MiniPlayerState extends State<MiniPlayer>
               _setVolume(state.volume - 0.05),
         },
         child: Listener(
-          onPointerCancel: (_) {
+          onPointerDown: (event) => _swipes.pointerDown(event.pointer),
+          onPointerUp: (event) => _swipes.pointerUp(event.pointer),
+          onPointerCancel: (event) {
+            _swipes.pointerUp(event.pointer);
             _swipeDistance = 0;
             _volumeEnd();
             unawaited(_settle());
@@ -587,23 +616,24 @@ class _MiniPlayerFace extends StatelessWidget {
     );
   }
 
-  Widget _playIcon() => Stack(
-    alignment: Alignment.center,
-    children: [
-      Icon(
-        playing
-            ? Icons.pause_circle_filled_rounded
-            : Icons.play_circle_filled_rounded,
-        size: 44,
-        color: NexMusic.violet,
-      ),
-      if (loading)
-        const SizedBox.square(
-          dimension: 48,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
-    ],
-  );
+  Widget _playIcon() => loading
+      ? const SizedBox.square(
+          dimension: 44,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: NexMusic.violet,
+              shape: BoxShape.circle,
+            ),
+            child: Center(child: _LoadingDots(size: 27, color: Colors.white)),
+          ),
+        )
+      : Icon(
+          playing
+              ? Icons.pause_circle_filled_rounded
+              : Icons.play_circle_filled_rounded,
+          size: 44,
+          color: NexMusic.violet,
+        );
 }
 
 class _MiniPlayerPreview extends StatelessWidget {

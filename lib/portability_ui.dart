@@ -63,10 +63,7 @@ class _PlaylistCsvReviewScreenState extends State<PlaylistCsvReviewScreen> {
     appBar: AppBar(title: const Text('Review imported tracks')),
     body: Column(
       children: [
-        if (busy)
-          LinearProgressIndicator(
-            value: widget.rows.isEmpty ? 0 : processed / widget.rows.length,
-          ),
+        _LoadingSlot(active: busy, height: 24),
         Padding(
           padding: const EdgeInsets.all(16),
           child: Text(

@@ -4,7 +4,7 @@ Flutter app for shared music, online songs and music videos.
 Signed-in listeners can upload audio songs into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.17+8040` has five tabs: Home, Stream, Library, Downloads and Profile. Home
+Version `0.4.18+8041` has five tabs: Home, Stream, Library, Downloads and Profile. Home
 groups public songs and videos into global recently played/watched, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and an Artists chip that lists the people in the For
@@ -19,9 +19,11 @@ refreshes it with three loading dots above the list.
 
 A song can sit in several categories; `categoryId` stays its main one and the
 optional `categoryIds` list holds all of them. Anyone signed in can rename or
-delete any category. App updates download in the background with a progress
-bar under every page, resume after a dropped connection, a network switch or a
-restart, and are checked against GitHub's SHA-256 before installing. The owner
+delete any category. App updates download in the background with a compact
+status surface at the top of every page. It slides and fades without abruptly
+moving the page, resumes after a dropped connection, a network switch or a
+restart, and is checked against GitHub's SHA-256 before installing. Upload and
+conversion activity uses the same top status treatment. The owner
 account can let other accounts manage users. Random Play uses every
 source on Home, online songs on Stream, and saved/library songs on Library.
 Inside a category, playlist, artist, Downloads or device music list, the same
@@ -29,7 +31,10 @@ button shuffles only that list's songs.
 
 Swipe the mini player up for the next song or down for the previous song.
 The full-screen player supports the same gestures, with a gentle artwork
-transition while its controls stay in place. Swiping the artwork also works
+transition while its controls stay in place. The card preview follows the
+finger immediately, while playback changes only after the gesture has been
+idle for 500 ms. Rapid swipes coalesce into one final playback change and a
+paused player stays paused. Swiping the artwork also works
 on short screens where the remaining content needs to scroll. Cancelled
 gestures settle back, and grabbing a settling mini card continues from its
 visible position. Loaded native sources are reused during buffering too.
@@ -37,8 +42,8 @@ Hold it, then slide left/right or up/down to adjust playback volume. Its volume
 bar stays for one second after release, then restores song details with a
 subtle fade; the trailing direction arrows are omitted. The mini player has
 a stack of song cards: dragging moves and fades the current card while revealing
-the next or previous card underneath. Short/cancelled drags settle back. Rapid
-swipes queue in order, and haptics confirm successful playback changes only.
+the next or previous card underneath. Short/cancelled drags settle back, and
+haptics confirm successful playback changes only.
 Manual swipes wrap within the current queue without changing repeat/autoplay.
 Native preloading, seeking and source edits run in sequence, and callbacks from
 the outgoing source cannot overwrite a manual track change. Failed switches
@@ -62,7 +67,8 @@ song names tool removes leading numeric prefixes of any length, updates queued
 titles, and leaves numbers elsewhere in the title intact.
 The app logo is a circular SVG, with matching Android vector artwork and round
 launcher resources. Transparent adaptive-icon margins preserve its circular
-appearance inside launcher masks. Launch uses a 200 ms fade with no hold;
+appearance inside launcher masks. Launch uses a 280 ms overlay fade with no
+hold or layout shift;
 the app accepts input from its first frame. Reduced motion skips the effect.
 The Android splash uses an unframed vector mark and an explicitly transparent
 icon background in both system themes; no dark badge or welcome-logo shadow.
@@ -83,9 +89,12 @@ Each category and playlist shows a recording once. Duplicate IDs, known
 recordings and file identities are collapsed within that collection, including
 playlist imports and restored data. A song can still belong to several playlists.
 Artist rows omit song counts. Opening an artist automatically fetches all
-available result pages, displays each provider's songs as they arrive, and
-stops requesting pages when the artist screen closes. Existing rows remain
-visible during failures, with retry for the affected page. Search includes
+available result pages and appends each provider's songs without reordering or
+rebuilding the rows already on screen, so the scroll position stays anchored.
+It stops requesting pages when the artist screen closes. Existing rows remain
+visible during failures, with retry for the affected page. Loading surfaces use
+the same compact three-dot indicator in fixed-height slots to avoid layout
+jumps. Search includes
 72 browse categories covering genres, moods, activities, decades and languages;
 tapping one immediately searches the online providers.
 Home search lists online matches first, followed by songs saved in the library.

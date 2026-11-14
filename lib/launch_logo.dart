@@ -14,7 +14,7 @@ class _LaunchLogoState extends State<LaunchLogo>
   late final _animation =
       AnimationController(
         vsync: this,
-        duration: const Duration(milliseconds: 200),
+        duration: const Duration(milliseconds: 280),
       )..addStatusListener((status) {
         if (status == AnimationStatus.completed && mounted) {
           setState(() => _finished = true);
@@ -48,7 +48,12 @@ class _LaunchLogoState extends State<LaunchLogo>
     return Stack(
       fit: StackFit.expand,
       children: [
-        widget.child,
+        FadeTransition(
+          opacity: Tween(begin: 0.88, end: 1.0).animate(
+            CurvedAnimation(parent: _animation, curve: Curves.easeOutCubic),
+          ),
+          child: widget.child,
+        ),
         Positioned.fill(
           child: IgnorePointer(
             child: FadeTransition(
@@ -60,7 +65,7 @@ class _LaunchLogoState extends State<LaunchLogo>
                 color: Theme.of(context).scaffoldBackgroundColor,
                 child: Center(
                   child: ScaleTransition(
-                    scale: Tween(begin: 0.98, end: 1.0).animate(
+                    scale: Tween(begin: 1.0, end: 0.94).animate(
                       CurvedAnimation(
                         parent: _animation,
                         curve: const Interval(
@@ -71,10 +76,14 @@ class _LaunchLogoState extends State<LaunchLogo>
                       ),
                     ),
                     child: FadeTransition(
-                      opacity: Tween(begin: 0.45, end: 1.0).animate(
+                      opacity: Tween(begin: 1.0, end: 0.35).animate(
                         CurvedAnimation(
                           parent: _animation,
-                          curve: const Interval(0, 0.5, curve: Curves.easeOut),
+                          curve: const Interval(
+                            0.2,
+                            1,
+                            curve: Curves.easeOutCubic,
+                          ),
                         ),
                       ),
                       child: SvgPicture.asset(

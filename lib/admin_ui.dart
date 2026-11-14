@@ -241,7 +241,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
               ],
             ),
           ),
-          if (_loading) const LinearProgressIndicator(),
+          _LoadingSlot(active: _loading, height: 24),
           if (_error != null)
             Padding(padding: const EdgeInsets.all(16), child: Text(_error!)),
           Expanded(
@@ -327,13 +327,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                             Align(
                               alignment: Alignment.centerRight,
                               child: _busy.contains(user.uid)
-                                  ? const SizedBox(
-                                      width: 24,
-                                      height: 24,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
+                                  ? const _LoadingDots(size: 24)
                                   : Wrap(
                                       spacing: 8,
                                       children: [

@@ -105,7 +105,7 @@ class _MusicPreviewsScreenState extends State<MusicPreviewsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Music previews')),
       body: busy
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: _LoadingDots())
           : tracks.isEmpty
           ? Center(child: Text(error ?? 'No previews found.'))
           : PageView.builder(

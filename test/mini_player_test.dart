@@ -9,7 +9,23 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'support/playback_test_player.dart';
 
-class _FailingSeek extends PlaybackTestPlayer {
+class _ObservedPlayer extends PlaybackTestPlayer {
+  int seeks = 0, plays = 0;
+
+  @override
+  Future<void> seek(Duration? position, {int? index}) async {
+    seeks++;
+    await super.seek(position, index: index);
+  }
+
+  @override
+  Future<void> play() async {
+    plays++;
+    await super.play();
+  }
+}
+
+class _FailingSeek extends _ObservedPlayer {
   bool fail = false;
   @override
   Future<void> seek(Duration? position, {int? index}) async {
@@ -96,7 +112,211 @@ Future<_Harness> _mount(
   return (music: music, player: player, close: close);
 }
 
+Future<void> _commitSwipe(WidgetTester tester) async {
+  await tester.pump(const Duration(milliseconds: 501));
+  await tester.pumpAndSettle();
+}
+
+Finder _swipeSurface(bool fullScreen) => find.byKey(
+  ValueKey(
+    fullScreen ? 'now-playing-artwork-gestures' : 'mini-player-gestures',
+  ),
+);
+
 void main() {
+  for (final fullScreen in [false, true]) {
+    final label = fullScreen ? 'full player' : 'mini player';
+
+    testWidgets('$label waits for 500ms after release before changing audio', (
+      tester,
+    ) async {
+      final native = _ObservedPlayer();
+      final state = await _mount(
+        tester,
+        fullScreen: fullScreen,
+        native: native,
+      );
+      final vibrations = _haptics();
+      final before = (native.sourceLoads, native.seeks, native.plays);
+      final gesture = await tester.startGesture(
+        tester.getCenter(_swipeSurface(fullScreen)),
+      );
+      await gesture.moveBy(const Offset(0, -90));
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(state.music.current?.id, 's1');
+      expect((native.sourceLoads, native.seeks, native.plays), before);
+      expect(native.isPlaying, isTrue);
+      expect(vibrations, isEmpty);
+
+      await gesture.up();
+      await tester.pump(const Duration(milliseconds: 499));
+      expect(state.music.current?.id, 's1');
+      expect((native.sourceLoads, native.seeks, native.plays), before);
+      expect(native.isPlaying, isTrue);
+      expect(vibrations, isEmpty);
+      await tester.pump(const Duration(milliseconds: 2));
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's2');
+      expect(vibrations, hasLength(1));
+      expect(native.sourceLoads + native.seeks, before.$1 + before.$2 + 1);
+      expect(native.isPlaying, isTrue);
+      await state.close();
+    });
+
+    testWidgets('$label rapid previews commit only the final song', (
+      tester,
+    ) async {
+      final native = _ObservedPlayer();
+      final state = await _mount(
+        tester,
+        fullScreen: fullScreen,
+        native: native,
+      );
+      final vibrations = _haptics();
+      final before = (native.sourceLoads, native.seeks, native.plays);
+      final surface = _swipeSurface(fullScreen);
+      await tester.drag(surface, const Offset(0, -90));
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.drag(surface, const Offset(0, -90));
+      await tester.pump(const Duration(milliseconds: 499));
+      expect(state.music.current?.id, 's1');
+      expect((native.sourceLoads, native.seeks, native.plays), before);
+      expect(vibrations, isEmpty);
+      await tester.pump(const Duration(milliseconds: 2));
+      await tester.pumpAndSettle();
+      expect(state.music.current?.id, 's0');
+      expect(native.sourceLoads + native.seeks, before.$1 + before.$2 + 1);
+      expect(native.plays, lessThanOrEqualTo(before.$3 + 1));
+      expect(vibrations, hasLength(1));
+      await state.close();
+    });
+
+    testWidgets(
+      '$label reversing the preview keeps the current audio position',
+      (tester) async {
+        final native = _ObservedPlayer();
+        final state = await _mount(
+          tester,
+          fullScreen: fullScreen,
+          native: native,
+        );
+        final vibrations = _haptics();
+        final before = (native.sourceLoads, native.seeks, native.plays);
+        native.lastSeek = const Duration(seconds: 35);
+        state.music.playback.position.value = native.lastSeek;
+        final surface = _swipeSurface(fullScreen);
+        await tester.drag(surface, const Offset(0, -90));
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.drag(surface, const Offset(0, 90));
+        await _commitSwipe(tester);
+        expect(state.music.current?.id, 's1');
+        expect((native.sourceLoads, native.seeks, native.plays), before);
+        expect(native.lastSeek, const Duration(seconds: 35));
+        expect(vibrations, isEmpty);
+        await state.close();
+      },
+    );
+
+    testWidgets(
+      '$label finger contact resets the delay even during a long hold',
+      (tester) async {
+        final native = _ObservedPlayer();
+        final state = await _mount(
+          tester,
+          fullScreen: fullScreen,
+          native: native,
+        );
+        final before = (native.sourceLoads, native.seeks, native.plays);
+        final surface = _swipeSurface(fullScreen);
+        await tester.drag(surface, const Offset(0, -90));
+        await tester.pump(const Duration(milliseconds: 200));
+        final held = await tester.startGesture(tester.getCenter(surface));
+        await tester.pump(const Duration(milliseconds: 700));
+        expect(state.music.current?.id, 's1');
+        expect((native.sourceLoads, native.seeks, native.plays), before);
+        await held.up();
+        await tester.pump(const Duration(milliseconds: 499));
+        expect(state.music.current?.id, 's1');
+        expect((native.sourceLoads, native.seeks, native.plays), before);
+        await tester.pump(const Duration(milliseconds: 2));
+        await tester.pumpAndSettle();
+        expect(state.music.current?.id, 's2');
+        await state.close();
+      },
+    );
+
+    testWidgets(
+      '$label a cancelled follow-up preserves only the valid preview',
+      (tester) async {
+        final native = _ObservedPlayer();
+        final state = await _mount(
+          tester,
+          fullScreen: fullScreen,
+          native: native,
+        );
+        final before = (native.sourceLoads, native.seeks, native.plays);
+        final surface = _swipeSurface(fullScreen);
+        await tester.drag(surface, const Offset(0, -90));
+        await tester.pump(const Duration(milliseconds: 200));
+        final cancelled = await tester.startGesture(tester.getCenter(surface));
+        await cancelled.moveBy(const Offset(0, -24));
+        await tester.pump(const Duration(milliseconds: 700));
+        expect(state.music.current?.id, 's1');
+        expect((native.sourceLoads, native.seeks, native.plays), before);
+        await cancelled.cancel();
+        await tester.pump(const Duration(milliseconds: 499));
+        expect(state.music.current?.id, 's1');
+        expect((native.sourceLoads, native.seeks, native.plays), before);
+        await tester.pump(const Duration(milliseconds: 2));
+        await tester.pumpAndSettle();
+        expect(state.music.current?.id, 's2');
+        await state.close();
+      },
+    );
+
+    testWidgets('$label committing a preview preserves paused playback', (
+      tester,
+    ) async {
+      final native = _ObservedPlayer();
+      final state = await _mount(
+        tester,
+        fullScreen: fullScreen,
+        native: native,
+      );
+      await state.music.togglePlay();
+      await tester.pumpAndSettle();
+      expect(native.isPlaying, isFalse);
+      final plays = native.plays;
+      await tester.drag(_swipeSurface(fullScreen), const Offset(0, -90));
+      await _commitSwipe(tester);
+      expect(state.music.current?.id, 's2');
+      expect(native.isPlaying, isFalse);
+      expect(native.plays, plays);
+      await state.close();
+    });
+
+    testWidgets(
+      '$label disposal cancels a pending preview without changing audio',
+      (tester) async {
+        final native = _ObservedPlayer();
+        final state = await _mount(
+          tester,
+          fullScreen: fullScreen,
+          native: native,
+        );
+        final before = (native.sourceLoads, native.seeks, native.plays);
+        await tester.drag(_swipeSurface(fullScreen), const Offset(0, -90));
+        await tester.pump(const Duration(milliseconds: 200));
+        await tester.pumpWidget(const SizedBox.shrink());
+        await _commitSwipe(tester);
+        expect(state.music.current?.id, 's1');
+        expect((native.sourceLoads, native.seeks, native.plays), before);
+        expect(tester.takeException(), isNull);
+        await state.close();
+      },
+    );
+  }
+
   testWidgets(
     'grabbing a settling mini card continues from its visible position',
     (tester) async {
@@ -160,12 +380,12 @@ void main() {
       final bounds = tester.getRect(controls);
       final art = find.byKey(const ValueKey('now-playing-artwork-gestures'));
       await tester.drag(art, const Offset(0, -100));
-      await tester.pumpAndSettle();
+      await _commitSwipe(tester);
       expect(state.music.current?.id, 's2');
       expect(tester.getRect(controls), bounds);
       state.music.playback.position.value = const Duration(seconds: 35);
       await tester.drag(art, const Offset(0, 100));
-      await tester.pumpAndSettle();
+      await _commitSwipe(tester);
       expect(state.music.current?.id, 's1');
       expect(state.player.sourceLoads, loads);
       expect(tester.getRect(controls), bounds);
@@ -174,20 +394,23 @@ void main() {
     },
   );
 
-  testWidgets('full player queues rapid swipes and confirms each change once', (
-    tester,
-  ) async {
-    final state = await _mount(tester, fullScreen: true);
-    final vibrations = _haptics();
-    final art = find.byKey(const ValueKey('now-playing-artwork-gestures'));
-    await tester.drag(art, const Offset(0, -90));
-    await tester.drag(art, const Offset(0, -90));
-    await tester.pumpAndSettle();
-    expect(state.music.current?.id, 's0');
-    expect(vibrations.length, 2);
-    expect(tester.takeException(), isNull);
-    await state.close();
-  });
+  testWidgets(
+    'full player coalesces rapid swipes and confirms final change once',
+    (tester) async {
+      final state = await _mount(tester, fullScreen: true);
+      final vibrations = _haptics();
+      final art = find.byKey(const ValueKey('now-playing-artwork-gestures'));
+      await tester.drag(art, const Offset(0, -90));
+      await tester.drag(art, const Offset(0, -90));
+      expect(state.music.current?.id, 's1');
+      expect(vibrations, isEmpty);
+      await _commitSwipe(tester);
+      expect(state.music.current?.id, 's0');
+      expect(vibrations.length, 1);
+      expect(tester.takeException(), isNull);
+      await state.close();
+    },
+  );
 
   testWidgets('full player cancelled and short drags keep the current track', (
     tester,
@@ -198,7 +421,7 @@ void main() {
     await gesture.moveBy(const Offset(0, -90));
     await tester.pump();
     await gesture.cancel();
-    await tester.pumpAndSettle();
+    await _commitSwipe(tester);
     expect(
       state.music.current?.id,
       's1',
@@ -209,7 +432,7 @@ void main() {
       const Offset(0, -24),
       const Duration(milliseconds: 350),
     );
-    await tester.pumpAndSettle();
+    await _commitSwipe(tester);
     expect(state.music.current?.id, 's1');
     final seek = find.byKey(const ValueKey('now-playing-seek'));
     await tester.ensureVisible(seek);
@@ -226,6 +449,10 @@ void main() {
       find.byKey(const ValueKey('now-playing-artwork-gestures')),
       const Offset(0, -90),
     );
+    expect(state.music.current?.id, 's1');
+    await tester.pump(const Duration(milliseconds: 499));
+    expect(state.music.current?.id, 's1');
+    await tester.pump(const Duration(milliseconds: 2));
     await tester.pumpAndSettle();
     expect(state.music.current?.id, 's2');
     final transform = tester.widget<Transform>(
@@ -273,20 +500,21 @@ void main() {
     },
   );
 
-  testWidgets(
-    'two rapid swipes both switch tracks and vibrate only after confirmation',
-    (tester) async {
-      final state = await _mount(tester);
-      final vibrations = _haptics();
-      final surface = find.byKey(const ValueKey('mini-player-gestures'));
-      await tester.drag(surface, const Offset(0, -90));
-      await tester.drag(surface, const Offset(0, -90));
-      await tester.pumpAndSettle();
-      expect(state.music.current?.id, 's0');
-      expect(vibrations.length, 2);
-      await state.close();
-    },
-  );
+  testWidgets('two rapid mini swipes commit the final track and vibrate once', (
+    tester,
+  ) async {
+    final state = await _mount(tester);
+    final vibrations = _haptics();
+    final surface = find.byKey(const ValueKey('mini-player-gestures'));
+    await tester.drag(surface, const Offset(0, -90));
+    await tester.drag(surface, const Offset(0, -90));
+    expect(state.music.current?.id, 's1');
+    expect(vibrations, isEmpty);
+    await _commitSwipe(tester);
+    expect(state.music.current?.id, 's0');
+    expect(vibrations.length, 1);
+    await state.close();
+  });
 
   testWidgets(
     'a failed native switch restores the old song without a success vibration',
@@ -302,7 +530,7 @@ void main() {
         find.byKey(const ValueKey('mini-player-gestures')),
         const Offset(0, -90),
       );
-      await tester.pumpAndSettle();
+      await _commitSwipe(tester);
       expect(state.music.current?.id, 's1');
       expect(vibrations, isEmpty);
       expect(state.music.notice, contains('could not play'));
@@ -334,7 +562,7 @@ void main() {
       find.byKey(const ValueKey('mini-player-gestures')),
       const Offset(0, -90),
     );
-    await tester.pumpAndSettle();
+    await _commitSwipe(tester);
     expect(state.music.current?.id, 's1');
     expect(vibrations, isEmpty);
     expect(
@@ -424,14 +652,14 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 90));
       expect(tester.getRect(play).top, lessThan(before.top));
-      await tester.pumpAndSettle();
+      await _commitSwipe(tester);
       expect(state.music.current?.id, 's2');
       expect(state.player.sourceLoads, loads);
       await tester.drag(
         find.byKey(const ValueKey('mini-player-gestures')),
         const Offset(0, 100),
       );
-      await tester.pumpAndSettle();
+      await _commitSwipe(tester);
       expect(state.music.current?.id, 's1');
       expect(state.player.sourceLoads, loads);
       expect(tester.getRect(play), before);
@@ -452,12 +680,12 @@ void main() {
       final state = await _mount(tester);
       final target = find.byKey(const ValueKey('mini-player-gestures'));
       await tester.drag(target, const Offset(0, -100));
-      await tester.pumpAndSettle();
+      await _commitSwipe(tester);
       expect(state.music.current?.id, 's2');
       expect(find.byType(NowPlayingScreen), findsNothing);
       state.music.playback.position.value = const Duration(seconds: 35);
       await tester.drag(target, const Offset(0, 100));
-      await tester.pumpAndSettle();
+      await _commitSwipe(tester);
       expect(state.music.current?.id, 's1');
       expect(find.byType(NowPlayingScreen), findsNothing);
       await state.close();
@@ -526,7 +754,7 @@ void main() {
     await gesture.moveBy(const Offset(0, -90));
     await tester.pump();
     await gesture.cancel();
-    await tester.pumpAndSettle();
+    await _commitSwipe(tester);
     expect(state.music.current?.id, 's1');
     expect(find.byType(NowPlayingScreen), findsNothing);
     await state.close();
@@ -552,6 +780,10 @@ void main() {
   testWidgets('gestures work with reduced motion enabled', (tester) async {
     final state = await _mount(tester, reducedMotion: true);
     await tester.drag(find.text('Track 1'), const Offset(0, -90));
+    expect(state.music.current?.id, 's1');
+    await tester.pump(const Duration(milliseconds: 499));
+    expect(state.music.current?.id, 's1');
+    await tester.pump(const Duration(milliseconds: 2));
     await tester.pumpAndSettle();
     expect(state.music.current?.id, 's2');
     final gesture = await tester.startGesture(

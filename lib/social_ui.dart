@@ -436,7 +436,7 @@ class _RoomRequestScreenState extends State<RoomRequestScreen> {
             },
           ),
         ),
-        if (busy) const LinearProgressIndicator(),
+        _LoadingSlot(active: busy, height: 24),
         Expanded(
           child: ListView.builder(
             itemCount: tracks.length,

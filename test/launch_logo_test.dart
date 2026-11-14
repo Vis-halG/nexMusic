@@ -4,7 +4,7 @@ import 'package:nex_music/launch_logo.dart';
 
 void main() {
   testWidgets(
-    'launch content accepts taps immediately and the logo is gone in 200 ms',
+    'launch content accepts taps immediately and keeps its layout while fading',
     (tester) async {
       var tapped = false;
       await tester.pumpWidget(
@@ -21,11 +21,16 @@ void main() {
         ),
       );
       await tester.pump();
+      final initialBounds = tester.getRect(find.text('Open'));
       await tester.tap(find.text('Open'));
       expect(tapped, isTrue);
-      await tester.pump(const Duration(milliseconds: 220));
+      await tester.pump(const Duration(milliseconds: 140));
+      expect(find.byKey(const ValueKey('launch-logo')), findsOneWidget);
+      expect(tester.getRect(find.text('Open')), initialBounds);
+      await tester.pump(const Duration(milliseconds: 160));
       await tester.pump();
       expect(find.byKey(const ValueKey('launch-logo')), findsNothing);
+      expect(tester.getRect(find.text('Open')), initialBounds);
     },
   );
   for (final reduced in [false, true]) {

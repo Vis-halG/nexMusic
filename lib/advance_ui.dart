@@ -198,7 +198,7 @@ class _AdvanceScreenState extends State<AdvanceScreen>
               ),
             const SizedBox(height: 12),
             if (_busy) ...[
-              const LinearProgressIndicator(),
+              const SizedBox(height: 24, child: Center(child: _LoadingDots())),
               const SizedBox(height: 12),
               const Text('Checking account usage…'),
               const SizedBox(height: 12),

@@ -412,7 +412,19 @@ class _SongSelectionBarState extends State<_SongSelectionBar> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (selection.busy)
-              LinearProgressIndicator(minHeight: 2, value: _shareFraction),
+              SizedBox(
+                height: 24,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const _LoadingDots(size: 24),
+                    if (_shareFraction != null) ...[
+                      const SizedBox(width: 8),
+                      Text('${(_shareFraction!.clamp(0, 1) * 100).round()}%'),
+                    ],
+                  ],
+                ),
+              ),
             if (_shareProgress != null)
               Padding(
                 padding: const EdgeInsets.only(left: 16, right: 8),

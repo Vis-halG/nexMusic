@@ -57,6 +57,7 @@ part 'previews_ui.dart';
 part 'song_selection_ui.dart';
 part 'advance_ui.dart';
 part 'mini_player.dart';
+part 'player_swipe_preview.dart';
 part 'music_browse_categories.dart';
 part 'notification_player_ui.dart';
 part 'song_languages_ui.dart';
@@ -389,8 +390,81 @@ class _UpdateSheetState extends State<_UpdateSheet> {
   }
 }
 
-/// Puts a bar under every page while an update downloads, so the app stays
-/// usable and the progress stays in view.
+/// Keeps global activity at the top without abruptly moving the current page.
+class _TopStatusLayout extends StatelessWidget {
+  const _TopStatusLayout({required this.child, this.status});
+
+  final Widget child;
+  final Widget? status;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduced = MediaQuery.disableAnimationsOf(context);
+    final duration = reduced
+        ? Duration.zero
+        : const Duration(milliseconds: 260);
+    final media = MediaQuery.of(context);
+    return Column(
+      children: [
+        ClipRect(
+          child: AnimatedSize(
+            duration: duration,
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: AnimatedSwitcher(
+              duration: duration,
+              reverseDuration: duration,
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              layoutBuilder: (current, previous) => Stack(
+                alignment: Alignment.topCenter,
+                children: [
+                  ...previous,
+                  ...[current].whereType<Widget>(),
+                ],
+              ),
+              transitionBuilder: (child, animation) => SizeTransition(
+                sizeFactor: animation,
+                alignment: Alignment.topCenter,
+                child: FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, -0.18),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                ),
+              ),
+              child:
+                  status ??
+                  const SizedBox(
+                    key: ValueKey('top-status-empty'),
+                    width: double.infinity,
+                  ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: TweenAnimationBuilder<double>(
+            duration: duration,
+            curve: Curves.easeOutCubic,
+            tween: Tween(end: status == null ? media.padding.top : 0),
+            builder: (context, top, page) => MediaQuery(
+              data: media.copyWith(padding: media.padding.copyWith(top: top)),
+              child: page!,
+            ),
+            child: child,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Puts update progress above every page, so it stays visible while the app is
+/// used and enters/leaves without a layout jump.
 class UpdateDownloadHost extends StatelessWidget {
   const UpdateDownloadHost({super.key, required this.child});
   final Widget child;
@@ -402,26 +476,14 @@ class UpdateDownloadHost extends StatelessWidget {
       // The keyboard would cover the bar anyway.
       final show =
           download != null && MediaQuery.viewInsetsOf(context).bottom == 0;
-      // The same widgets either way, so the pages keep their state when
-      // the bar comes and goes.
-      return Column(
-        children: [
-          Expanded(
-            child: MediaQuery.removePadding(
-              context: context,
-              removeBottom: show,
-              child: child,
-            ),
-          ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topCenter,
-            child: show
-                ? _UpdateDownloadBar(download: download)
-                : const SizedBox(width: double.infinity),
-          ),
-        ],
+      return _TopStatusLayout(
+        status: show
+            ? KeyedSubtree(
+                key: const ValueKey('update-download-status'),
+                child: _UpdateDownloadBar(download: download),
+              )
+            : null,
+        child: child,
       );
     },
   );
@@ -520,20 +582,15 @@ class _UpdateDownloadBar extends StatelessWidget {
       return Material(
         color: scheme.surfaceContainerHigh,
         child: SafeArea(
-          top: false,
+          bottom: false,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              LinearProgressIndicator(
-                value: download.state == UpdateDownloadState.verifying
-                    ? null
-                    : download.state == UpdateDownloadState.ready
-                    ? 1
-                    : download.fraction,
-                minHeight: 3,
-                color: waiting ? scheme.outline : NexMusic.violet,
-                backgroundColor: NexMusic.violet.withValues(alpha: 0.15),
-              ),
+              if (download.state != UpdateDownloadState.ready)
+                _LoadingDots(
+                  size: 28,
+                  color: waiting ? scheme.outline : NexMusic.violet,
+                ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 4, 8),
                 child: Row(
@@ -938,9 +995,15 @@ class _EmptyState extends StatelessWidget {
 /// Three violet dots. While [animate] is off they fill in with [progress],
 /// which is how far a pull to refresh has gone.
 class _LoadingDots extends StatefulWidget {
-  const _LoadingDots({this.progress = 1, this.animate = true});
-  final double progress;
+  const _LoadingDots({
+    this.progress = 1,
+    this.animate = true,
+    this.size = 45,
+    this.color = NexMusic.violet,
+  });
+  final double progress, size;
   final bool animate;
+  final Color color;
 
   @override
   State<_LoadingDots> createState() => _LoadingDotsState();
@@ -952,10 +1015,20 @@ class _LoadingDotsState extends State<_LoadingDots>
     vsync: this,
     duration: const Duration(milliseconds: 1050),
   );
+  bool _reduceMotion = false;
 
   @override
   void initState() {
     super.initState();
+    _sync();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    if (_reduceMotion == reduceMotion) return;
+    _reduceMotion = reduceMotion;
     _sync();
   }
 
@@ -966,8 +1039,10 @@ class _LoadingDotsState extends State<_LoadingDots>
   }
 
   void _sync() {
-    if (!widget.animate) {
-      _wave.value = 0;
+    if (!widget.animate || _reduceMotion) {
+      _wave
+        ..stop()
+        ..value = 0;
     } else if (!_wave.isAnimating) {
       _wave.repeat();
     }
@@ -982,44 +1057,99 @@ class _LoadingDotsState extends State<_LoadingDots>
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: _wave,
-    builder: (context, _) => Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < 3; i++)
-          Builder(
-            builder: (context) {
-              // Each dot rises in turn, a sixth of a cycle after the last.
-              final lift = widget.animate
-                  ? math.max(
-                      0.0,
-                      math.sin(((_wave.value - i / 6) % 1) * 2 * math.pi),
-                    )
-                  : 0.0;
-              final shown = widget.animate
-                  ? 0.4 + 0.6 * lift
-                  : (widget.progress * 3 - i).clamp(0.0, 1.0);
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 3.5),
-                child: Transform.translate(
-                  offset: Offset(0, -6 * lift),
-                  child: Opacity(
-                    opacity: shown,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                        color: NexMusic.violet,
-                        shape: BoxShape.circle,
+    builder: (context, _) {
+      final scale = widget.size / 45;
+      final animate = widget.animate && !_reduceMotion;
+      return Semantics(
+        label: 'Loading',
+        child: SizedBox(
+          key: const ValueKey('loading-dots'),
+          width: widget.size,
+          height: math.max(12, 20 * scale),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < 3; i++)
+                Builder(
+                  builder: (context) {
+                    // Each dot rises in turn, a sixth of a cycle after the last.
+                    final lift = animate
+                        ? math.max(
+                            0.0,
+                            math.sin(((_wave.value - i / 6) % 1) * 2 * math.pi),
+                          )
+                        : 0.0;
+                    final shown = animate
+                        ? 0.4 + 0.6 * lift
+                        : widget.animate
+                        ? 0.75
+                        : (widget.progress * 3 - i).clamp(0.0, 1.0);
+                    return Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 3.5 * scale),
+                      child: Transform.translate(
+                        offset: Offset(0, -6 * scale * lift),
+                        child: Opacity(
+                          opacity: shown,
+                          child: Container(
+                            width: 8 * scale,
+                            height: 8 * scale,
+                            decoration: BoxDecoration(
+                              color: widget.color,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
-              );
-            },
+            ],
           ),
-      ],
-    ),
+        ),
+      );
+    },
   );
+}
+
+/// A fixed-height loading area. It fades the shared dots without making the
+/// surrounding content jump when work begins or ends.
+class _LoadingSlot extends StatelessWidget {
+  const _LoadingSlot({required this.active, this.height = 28});
+
+  final bool active;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 180);
+    return SizedBox(
+      height: height,
+      child: AnimatedSwitcher(
+        duration: duration,
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: ScaleTransition(
+            scale: Tween(begin: 0.92, end: 1.0).animate(animation),
+            child: child,
+          ),
+        ),
+        child: active
+            ? Center(
+                key: const ValueKey('loading-slot-active'),
+                child: const _LoadingDots(size: 36),
+              )
+            : const SizedBox(
+                key: ValueKey('loading-slot-idle'),
+                width: double.infinity,
+              ),
+      ),
+    );
+  }
 }
 
 /// Pull to refresh for a [CustomScrollView]: the list moves down to make room
@@ -1251,10 +1381,7 @@ class WelcomeScreen extends StatelessWidget {
                     ? null
                     : music.signInWithGoogle,
                 child: state.loading
-                    ? const SizedBox.square(
-                        dimension: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                    ? const _LoadingDots(size: 24)
                     : const Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -4016,7 +4143,10 @@ Future<void> _cleanUpSongNames(BuildContext context) async {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                LinearProgressIndicator(value: value),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: _LoadingDots(),
+                ),
                 const SizedBox(height: 12),
                 Text('${(value * 100).round()}% · Keep the app open.'),
               ],
@@ -4142,7 +4272,6 @@ class _UploadScreenState extends State<UploadScreen> {
   StreamUploadJob? _streamJob;
   bool _streamSubmitted = false;
   bool get _streamBusy => _streamJob?.busy ?? false;
-  double? get _streamProgress => _streamJob?.progress;
   String? get _streamError => _streamJob?.error;
   late final Object _account;
 
@@ -4490,7 +4619,7 @@ class _UploadScreenState extends State<UploadScreen> {
               (_streamBusy || _streamError != null)) ...[
             Text(_streamError ?? 'Preparing audio for your Library...'),
             const SizedBox(height: 8),
-            if (_streamBusy) LinearProgressIndicator(value: _streamProgress),
+            if (_streamBusy) const Center(child: _LoadingDots()),
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
@@ -4675,10 +4804,7 @@ class _UploadScreenState extends State<UploadScreen> {
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 8),
-                LinearProgressIndicator(
-                  value: music.uploadFraction,
-                  minHeight: 4,
-                ),
+                _LoadingSlot(active: uploading),
                 const SizedBox(height: 8),
                 Text(
                   uploading
@@ -4865,11 +4991,7 @@ class _FetchBox extends StatelessWidget {
             Row(
               children: [
                 if (error == null)
-                  const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                  const _LoadingDots(size: 24)
                 else
                   Icon(Icons.error_outline_rounded, color: scheme.error),
                 const SizedBox(width: 12),
@@ -5020,13 +5142,7 @@ class _UploadRow extends StatelessWidget {
         item.error ?? 'Waiting',
       ),
       UploadStatus.uploading => (
-        SizedBox.square(
-          dimension: 20,
-          child: CircularProgressIndicator(
-            strokeWidth: 2.5,
-            value: item.progress,
-          ),
-        ),
+        const _LoadingDots(size: 24),
         '${(item.progress * 100).round()}%',
       ),
       UploadStatus.done => (
@@ -5466,9 +5582,26 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
   double _swipeStart = 0, _swipeDistance = 0, _dragOrigin = 0;
   bool _switching = false, _queuedGesture = false;
   Song? _artSong;
+  late final _PlayerSwipePreview _swipes;
+
+  @override
+  void initState() {
+    super.initState();
+    _swipes = _PlayerSwipePreview(context.read<MusicController>(), () {
+      if (!mounted) return;
+      setState(() {
+        if (!_swipes.active) {
+          _pendingSwipes.clear();
+          _artSong = null;
+          _artMotion.value = 0;
+        }
+      });
+    });
+  }
 
   @override
   void dispose() {
+    _swipes.dispose();
     _pendingSwipes.clear();
     _artMotion.dispose();
     super.dispose();
@@ -5507,7 +5640,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
     _artMotion.stop();
     _dragOrigin = _artMotion.value;
     final music = context.read<MusicController>();
-    setState(() => _artSong = music.current);
+    setState(() => _artSong = _swipes.song ?? music.current);
     unawaited(music.playback.warmAdjacent());
   }
 
@@ -5535,23 +5668,24 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
     _pendingSwipes.add(next);
     if (_switching) return;
     _switching = true;
+    _swipes.animating(true);
     final music = context.read<MusicController>();
     try {
       while (mounted && _pendingSwipes.isNotEmpty) {
         final direction = _pendingSwipes.removeAt(0);
-        final target = music.playback.queue.swipeTarget(next: direction);
+        final previous = _swipes.song ?? music.current;
+        final target = _swipes.target(direction);
         if (target == null || !music.allowsSong(target)) {
           await _animateArt(0);
           if (mounted) setState(() => _artSong = null);
           continue;
         }
-        setState(() => _artSong ??= music.current);
-        final switching = music.playback.swipeTo(target, backwards: !direction);
+        setState(() => _artSong ??= previous);
+        _swipes.step(direction);
+        _swipes.release();
         await _animateArt(direction ? -72 : 72);
-        final switched = await switching;
         if (!mounted) return;
-        if (switched && music.current?.id == target.id) {
-          unawaited(HapticFeedback.selectionClick());
+        if (_swipes.song?.id == target.id) {
           setState(() {
             _artSong = target;
             _artMotion.value = direction ? 72 : -72;
@@ -5571,12 +5705,16 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
       }
     } finally {
       _switching = false;
+      _swipes.animating(false);
     }
   }
 
   Widget _swipeArea({required Widget child, Key? key}) => Listener(
     key: key,
-    onPointerCancel: (_) {
+    onPointerDown: (event) => _swipes.pointerDown(event.pointer),
+    onPointerUp: (event) => _swipes.pointerUp(event.pointer),
+    onPointerCancel: (event) {
+      _swipes.pointerUp(event.pointer);
       _swipeDistance = 0;
       _queuedGesture = false;
       unawaited(_settleArt());
@@ -5621,7 +5759,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
           );
         });
     final music = context.read<MusicController>();
-    final song = state.song;
+    final song = _swipes.song ?? state.song;
     final muted = _muted(context);
 
     return Scaffold(
@@ -5907,12 +6045,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
                                     ),
                                     onPressed: music.togglePlay,
                                     icon: state.loading
-                                        ? const SizedBox.square(
-                                            dimension: 24,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.white,
-                                            ),
+                                        ? const _LoadingDots(
+                                            size: 28,
+                                            color: Colors.white,
                                           )
                                         : Icon(
                                             state.playing
@@ -6058,13 +6193,7 @@ class _VideoScreenState extends State<VideoScreen> {
                         style: TextStyle(color: Colors.white70),
                       )
                     : !value.isInitialized
-                    ? const SizedBox.square(
-                        dimension: 24,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
+                    ? const _LoadingDots(size: 32, color: Colors.white)
                     : GestureDetector(
                         onTap: _toggle,
                         child: AspectRatio(
@@ -8354,11 +8483,7 @@ class _NexBrowserScreenState extends State<NexBrowserScreen> {
             child: FilledButton.icon(
               onPressed: waiting || _working ? null : _runStep,
               icon: waiting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
+                  ? const _LoadingDots(size: 22, color: Colors.white)
                   : Icon(icon, size: 18),
               label: Text(label),
             ),
@@ -8880,13 +9005,9 @@ class _NexBrowserScreenState extends State<NexBrowserScreen> {
             ),
         ],
         bottom: _progress > 0 && _progress < 100
-            ? PreferredSize(
-                preferredSize: const Size.fromHeight(2.5),
-                child: LinearProgressIndicator(
-                  value: _progress / 100,
-                  minHeight: 2.5,
-                  color: NexMusic.violet,
-                ),
+            ? const PreferredSize(
+                preferredSize: Size.fromHeight(24),
+                child: Center(child: _LoadingDots(size: 24)),
               )
             : null,
       ),

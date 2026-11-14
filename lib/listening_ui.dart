@@ -726,7 +726,7 @@ class _PlaylistAddScreenState extends State<PlaylistAddScreen> {
               },
             ),
           ),
-          if (busy) const LinearProgressIndicator(),
+          _LoadingSlot(active: busy, height: 24),
           Expanded(
             child: ListView.builder(
               itemCount: visible.length,
@@ -964,7 +964,7 @@ class _MusicLyricsScreenState extends State<MusicLyricsScreen> {
         ],
       ),
       body: busy
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: _LoadingDots())
           : error != null
           ? Center(
               child: Padding(
@@ -981,7 +981,7 @@ class _MusicLyricsScreenState extends State<MusicLyricsScreen> {
             )
           : Column(
               children: [
-                if (translating) const LinearProgressIndicator(),
+                _LoadingSlot(active: translating, height: 24),
                 if (translated != null)
                   Expanded(
                     child: SingleChildScrollView(
@@ -1213,8 +1213,18 @@ class MusicDownloadsScreen extends StatelessWidget {
                 children: [
                   Text(job.error ?? job.status.name),
                   if (job.status == MusicDownloadStatus.downloading)
-                    LinearProgressIndicator(
-                      value: job.total > 0 ? job.progress : null,
+                    Row(
+                      children: [
+                        const _LoadingDots(size: 24),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            job.total > 0
+                                ? '${(job.progress.clamp(0, 1) * 100).round()}% · ${_fileSize(job.bytes)} / ${_fileSize(job.total)}'
+                                : _fileSize(job.bytes),
+                          ),
+                        ),
+                      ],
                     ),
                 ],
               ),
@@ -1326,10 +1336,7 @@ class LibrarySettingsScreen extends StatelessWidget {
                       : 'Sign in to sync across devices'),
             ),
             trailing: music.personal.syncing
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                ? const _LoadingDots(size: 24)
                 : null,
             onTap: () => music.personal.syncNow(),
           ),
@@ -1446,11 +1453,7 @@ class ListeningSettingsScreen extends StatelessWidget {
                       : 'Sign in to sync across devices'),
             ),
             trailing: music.personal.syncing
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                ? const _LoadingDots(size: 24)
                 : null,
             onTap: () => music.personal.syncNow(),
           ),
@@ -1521,7 +1524,7 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
     body: error != null
         ? Center(child: Text(error!))
         : parameters == null
-        ? const Center(child: CircularProgressIndicator())
+        ? const Center(child: _LoadingDots())
         : ListView(
             children: [
               SwitchListTile(

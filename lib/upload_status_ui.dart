@@ -20,7 +20,7 @@ class UploadStatusHost extends StatelessWidget {
           final converting = shared.where((j) => j.waiting).firstOrNull;
           String? title, detail;
           double? progress;
-          bool error = false;
+          bool error = false, loading = false;
           VoidCallback? onTap, onCancel;
           if (stream != null) {
             error = stream.error != null;
@@ -31,12 +31,14 @@ class UploadStatusHost extends StatelessWidget {
                 : 'Waiting to upload';
             detail = stream.error ?? stream.title;
             progress = stream.progress;
+            loading = !error;
             onCancel = stream.cancel;
             if (error) onTap = () => unawaited(stream.prepare());
           } else if (converting != null) {
             title = 'Preparing shared audio';
             detail = converting.status;
             progress = converting.fraction;
+            loading = true;
             onCancel = converting.cancel;
           } else if (music.uploads.isNotEmpty) {
             error = music.uploadsFailed > 0 && !music.uploading;
@@ -52,6 +54,7 @@ class UploadStatusHost extends StatelessWidget {
             detail =
                 '${music.uploadsFinished} of ${music.uploads.length} processed';
             progress = music.uploadFraction;
+            loading = music.uploading && !music.uploadsPaused;
             onTap = () => musicNavigatorKey.currentState?.push<void>(
               NexPageRoute(
                 builder: (_) => const UploadScreen(),
@@ -62,81 +65,94 @@ class UploadStatusHost extends StatelessWidget {
                 ? music.cancelUploads
                 : music.clearUploads;
           }
-          if (title == null) return page!;
-          return Column(
-            children: [
-              Material(
-                color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                child: SafeArea(
-                  bottom: false,
-                  child: InkWell(
-                    onTap: onTap,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 4, 6),
-                      child: Row(
-                        children: [
-                          Icon(
-                            error
-                                ? Icons.error_outline_rounded
-                                : Icons.cloud_upload_outlined,
-                            color: error
-                                ? Theme.of(context).colorScheme.error
-                                : NexMusic.violet,
-                            size: 22,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
+          return _TopStatusLayout(
+            status: title == null
+                ? null
+                : Material(
+                    key: const ValueKey('upload-transfer-status'),
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    child: SafeArea(
+                      bottom: false,
+                      child: InkWell(
+                        onTap: onTap,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 4, 6),
+                          child: Row(
+                            children: [
+                              Icon(
+                                error
+                                    ? Icons.error_outline_rounded
+                                    : Icons.cloud_upload_outlined,
+                                color: error
+                                    ? Theme.of(context).colorScheme.error
+                                    : NexMusic.violet,
+                                size: 22,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    Text(
+                                      detail ?? '',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: _muted(context),
+                                      ),
+                                    ),
+                                    if (loading || (progress != null && !error))
+                                      SizedBox(
+                                        height: 24,
+                                        child: Row(
+                                          children: [
+                                            if (loading)
+                                              const _LoadingDots(size: 24),
+                                            if (progress != null && !error) ...[
+                                              if (loading)
+                                                const SizedBox(width: 8),
+                                              Text(
+                                                '${(progress.clamp(0, 1) * 100).round()}%',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: _muted(context),
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              Semantics(
+                                label: 'Dismiss or cancel transfer',
+                                button: true,
+                                child: IconButton(
+                                  onPressed: onCancel,
+                                  icon: const Icon(
+                                    Icons.close_rounded,
+                                    size: 18,
                                   ),
                                 ),
-                                Text(
-                                  detail ?? '',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: _muted(context),
-                                  ),
-                                ),
-                                const SizedBox(height: 5),
-                                LinearProgressIndicator(
-                                  value: error ? 0 : progress,
-                                  minHeight: 2,
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                          Semantics(
-                            label: 'Dismiss or cancel transfer',
-                            button: true,
-                            child: IconButton(
-                              onPressed: onCancel,
-                              icon: const Icon(Icons.close_rounded, size: 18),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
-              Expanded(
-                child: MediaQuery.removePadding(
-                  context: context,
-                  removeTop: true,
-                  child: page!,
-                ),
-              ),
-            ],
+            child: page!,
           );
         },
       ),

@@ -17,6 +17,7 @@ class _ArtistProvider extends Fake implements MusicProvider {
   Completer<void>? secondPage;
   Completer<void>? firstPage;
   bool repeatPage = false;
+  Map<int, List<Song>>? pageSongs;
   @override
   final String id;
   @override
@@ -43,6 +44,7 @@ class _ArtistProvider extends Fake implements MusicProvider {
       throw StateError('Offline');
     }
     if (page == 2) await secondPage?.future;
+    if (pageSongs != null) return pageSongs![page] ?? [];
     if (repeatPage) return [song('a'), song('b')];
     return switch (page) {
       1 => [song('a'), song('b'), song('unrelated', artist: 'Other singer')],
@@ -74,7 +76,9 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(find.text('Artist song a'), findsOneWidget);
-      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      expect(find.byKey(const ValueKey('artist-loading')), findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
       pending.complete();
       await tester.pumpAndSettle();
       expect(first.pages, [1, 2, 3]);
@@ -145,6 +149,7 @@ void main() {
       expect(find.text('Load more songs'), findsNothing);
       expect(find.textContaining(RegExp(r'^\d+ songs')), findsNothing);
       expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(find.byKey(const ValueKey('artist-loading')), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
       music.dispose();
     },
@@ -170,6 +175,7 @@ void main() {
     expect(provider.pages, [1, 2]);
     expect(find.text('Artist song a'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(find.byKey(const ValueKey('artist-loading')), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
     music.dispose();
   });
@@ -204,6 +210,87 @@ void main() {
       await tester.pump();
       expect(provider.pages, [1, 2]);
       expect(tester.takeException(), isNull);
+      music.dispose();
+    },
+  );
+
+  testWidgets(
+    'provider batches and later pages append without moving visible artist rows',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final firstBatch = Completer<void>();
+      final laterPage = Completer<void>();
+      final first = _ArtistProvider()..secondPage = laterPage;
+      final second = _ArtistProvider('ytmusic')
+        ..firstPage = firstBatch
+        ..secondPage = laterPage;
+      final original = [for (var i = 0; i < 20; i++) first.song('a$i')];
+      first.pageSongs = {
+        1: original,
+        2: [original[8], first.song('next-page')],
+      };
+      second.pageSongs = {
+        1: [
+          original[8].copyWith(id: 'duplicate-a8', providerId: 'ytmusic'),
+          second.song('late-source'),
+        ],
+        2: [second.song('another-page')],
+      };
+      final music = MusicController(
+        await SharedPreferences.getInstance(),
+        player: PlaybackTestPlayer(),
+        musicProviders: [first, second],
+      );
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: music,
+          child: MaterialApp(home: ArtistAlbumScreen(song: first.song('seed'))),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      final list = find.byKey(const ValueKey('artist-tracks'));
+      final scroll = tester.state<ScrollableState>(
+        find.descendant(of: list, matching: find.byType(Scrollable)),
+      );
+      scroll.position.jumpTo(400);
+      await tester.pump();
+      final anchor = find.byKey(const ValueKey('artist-track:a8'));
+      final anchorElement = tester.element(anchor);
+      final anchorBounds = tester.getRect(anchor);
+
+      firstBatch.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(scroll.position.pixels, 400);
+      expect(tester.getRect(anchor), anchorBounds);
+      expect(tester.element(anchor), same(anchorElement));
+      expect(find.text('Artist song a8'), findsOneWidget);
+      expect(first.pages, [1, 2]);
+
+      laterPage.complete();
+      await tester.pumpAndSettle();
+      expect(scroll.position.pixels, 400);
+      expect(tester.getRect(anchor), anchorBounds);
+      expect(tester.element(anchor), same(anchorElement));
+      expect(first.pages, [1, 2, 3]);
+      expect(second.pages, [1, 2, 3]);
+
+      scroll.position.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      final oldLast = tester.getTopLeft(find.text('Artist song a19')).dy;
+      final late = tester.getTopLeft(find.text('Artist song late-source')).dy;
+      final next = tester.getTopLeft(find.text('Artist song next-page')).dy;
+      final finalTrack = tester
+          .getTopLeft(find.text('Artist song another-page'))
+          .dy;
+      expect(oldLast, lessThan(late));
+      expect(late, lessThan(next));
+      expect(next, lessThan(finalTrack));
+      expect(find.byKey(const ValueKey('artist-loading')), findsNothing);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
       music.dispose();
     },
   );

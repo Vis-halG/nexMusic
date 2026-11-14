@@ -35,6 +35,23 @@ class _DelayedPreload extends PlaybackTestPlayer {
   }
 }
 
+class _ObservedPlayer extends PlaybackTestPlayer {
+  int playCalls = 0;
+  bool failSeek = false;
+
+  @override
+  Future<void> play() async {
+    playCalls++;
+    await super.play();
+  }
+
+  @override
+  Future<void> seek(Duration? position, {int? index}) async {
+    if (failSeek) throw StateError('Native seek failed');
+    await super.seek(position, index: index);
+  }
+}
+
 class _NoisyIndices extends PlaybackTestPlayer {
   final indices = StreamController<int?>.broadcast(sync: true);
   @override
@@ -68,6 +85,116 @@ class _NoisyIndices extends PlaybackTestPlayer {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  for (final gapless in [true, false]) {
+    for (final paused in [true, false]) {
+      test(
+        'swipe preserves ${paused ? 'paused' : 'playing'} state with ${gapless ? 'prepared sources' : 'a source reload'}',
+        () async {
+          final native = _ObservedPlayer();
+          final engine = ListeningPlayer(
+            player: native,
+            resolve: (s) async => AudioSource.uri(Uri.parse(s.url), tag: s),
+            settings: () => ListeningSettings({'gapless': gapless}),
+            onTrack: (_) {},
+            onListening: (_, _, {skipped = false, completed = false}) {},
+            onError: fail,
+          );
+          await engine.play(_tracks.first, from: _tracks);
+          await Future<void>.delayed(Duration.zero);
+          if (paused) await engine.pause();
+          final loads = native.sourceLoads, starts = native.playCalls;
+          expect(await engine.swipeTo(_tracks[1], backwards: false), isTrue);
+          expect(engine.queue.current?.id, '1');
+          expect(native.playing, !paused);
+          expect(native.sourceLoads, loads + (gapless ? 0 : 1));
+          expect(native.playCalls, starts + (!paused && !gapless ? 1 : 0));
+          engine.dispose();
+        },
+      );
+    }
+  }
+
+  test(
+    'a failed paused swipe restores its queue without starting audio',
+    () async {
+      final native = _ObservedPlayer(), errors = <String>[];
+      final engine = ListeningPlayer(
+        player: native,
+        resolve: (s) async => AudioSource.uri(Uri.parse(s.url), tag: s),
+        settings: () => ListeningSettings(),
+        onTrack: (_) {},
+        onListening: (_, _, {skipped = false, completed = false}) {},
+        onError: errors.add,
+      );
+      await engine.play(_tracks.first, from: _tracks);
+      await Future<void>.delayed(Duration.zero);
+      await engine.pause();
+      final starts = native.playCalls;
+      native.failSeek = true;
+      expect(await engine.swipeTo(_tracks[1], backwards: false), isFalse);
+      expect(engine.queue.current?.id, '0');
+      expect(native.playing, isFalse);
+      expect(native.playCalls, starts);
+      expect(errors, hasLength(1));
+      native.failSeek = false;
+      await engine.resume();
+      expect(engine.queue.current?.id, '0');
+      expect(native.playing, isTrue);
+      engine.dispose();
+    },
+  );
+
+  for (final pauseDuringResolve in [false, true]) {
+    test(
+      '${pauseDuringResolve ? 'pausing' : 'a newer preview'} cancels a pending swipe without starting its audio',
+      () async {
+        final pending = Completer<AudioSource>();
+        final native = _ObservedPlayer(), selected = <String>[];
+        final engine = ListeningPlayer(
+          player: native,
+          resolve: (s) => s.id == '1'
+              ? pending.future
+              : Future.value(AudioSource.uri(Uri.parse(s.url), tag: s)),
+          settings: () => ListeningSettings({'gapless': false}),
+          onTrack: (s) => selected.add(s.id),
+          onListening: (_, _, {skipped = false, completed = false}) {},
+          onError: fail,
+        );
+        await engine.play(_tracks.first, from: _tracks);
+        var current = true;
+        final starts = native.playCalls, loads = native.sourceLoads;
+        final switching = engine.swipeTo(
+          _tracks[1],
+          backwards: false,
+          isCurrent: () => current,
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(engine.loading, isTrue);
+        if (pauseDuringResolve) {
+          await engine.pause();
+        } else {
+          current = false;
+        }
+        pending.complete(
+          AudioSource.uri(Uri.parse(_tracks[1].url), tag: _tracks[1]),
+        );
+        expect(await switching, isFalse);
+        expect(engine.queue.current?.id, '0');
+        expect(selected, ['0']);
+        expect(engine.loading, isFalse);
+        expect(native.playing, !pauseDuringResolve);
+        expect(native.playCalls, starts);
+        expect(native.sourceLoads, loads);
+        if (!pauseDuringResolve) {
+          expect(await engine.swipeTo(_tracks[2], backwards: false), isTrue);
+          expect(selected, ['0', '2']);
+          expect(native.playing, isTrue);
+        }
+        engine.dispose();
+      },
+    );
+  }
+
   test('swiping while buffering reuses the prepared native source', () async {
     final native = PlaybackTestPlayer();
     final engine = ListeningPlayer(
@@ -89,6 +216,36 @@ void main() {
     expect(engine.queue.current?.id, '1');
     engine.dispose();
   });
+  test(
+    'a newer preview cancels a swipe waiting for a native playlist edit',
+    () async {
+      final native = _DelayedPreload();
+      final engine = ListeningPlayer(
+        player: native,
+        resolve: (s) async => AudioSource.uri(Uri.parse(s.url), tag: s),
+        settings: () => ListeningSettings(),
+        onTrack: (_) {},
+        onListening: (_, _, {skipped = false, completed = false}) {},
+        onError: fail,
+      );
+      await engine.play(_tracks.first, from: _tracks);
+      await native.adding.future;
+      var current = true;
+      final switching = engine.swipeTo(
+        _tracks[1],
+        backwards: false,
+        isCurrent: () => current,
+      );
+      await Future<void>.delayed(Duration.zero);
+      current = false;
+      native.release.complete();
+      expect(await switching, isFalse);
+      expect(native.currentIndex, 0);
+      expect(native.playing, isTrue);
+      expect(engine.queue.current?.id, '0');
+      engine.dispose();
+    },
+  );
   test(
     'swiping during native preload waits for its playlist edit instead of losing the switch',
     () async {
