@@ -32,6 +32,43 @@ class _CategoryProvider extends FakeMusicProvider {
 }
 
 void main() {
+  testWidgets(
+    'search opens focused and browsing dismisses the keyboard on scroll',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 780);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      SharedPreferences.setMockInitialValues({});
+      final music = MusicController(
+        await SharedPreferences.getInstance(),
+        player: PlaybackTestPlayer(),
+      );
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: music,
+          child: MaterialApp(
+            theme: NexMusic.theme(Brightness.light),
+            home: const SearchScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final editable = tester.widget<EditableText>(find.byType(EditableText));
+      expect(editable.focusNode.hasFocus, isTrue);
+      expect(tester.testTextInput.hasAnyClients, isTrue);
+
+      await tester.drag(find.byType(Scrollable).last, const Offset(0, -250));
+      await tester.pump();
+      expect(editable.focusNode.hasFocus, isFalse);
+      expect(tester.testTextInput.hasAnyClients, isFalse);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      music.dispose();
+    },
+  );
+
   for (final category in ['Pop & Hits', 'Nature Sounds']) {
     testWidgets(
       'browsing $category starts a provider search and shows its songs',

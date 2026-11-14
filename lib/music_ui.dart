@@ -3381,6 +3381,7 @@ class _SpotifyBrowseView extends StatefulWidget {
 
 class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
   final _searchController = TextEditingController();
+  final _searchFocus = FocusNode();
   Timer? _debounce;
 
   void _browseCategory(String query) {
@@ -3406,6 +3407,7 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
   }
 
   Widget _browse(MusicController music) => CustomScrollView(
+    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
     slivers: [
       const SliverPadding(
         padding: EdgeInsets.fromLTRB(20, 8, 20, 14),
@@ -3459,6 +3461,7 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _searchFocus.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -3490,6 +3493,8 @@ class _SpotifyBrowseViewState extends State<_SpotifyBrowseView> {
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
           child: TextField(
             controller: _searchController,
+            focusNode: _searchFocus,
+            autofocus: true,
             textInputAction: TextInputAction.search,
             onChanged: _onSearch,
             onSubmitted: (query) => _onSearch(query, immediately: true),
