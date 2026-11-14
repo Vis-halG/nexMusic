@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:nex_music/main.dart';
 import 'package:nex_music/music_controller.dart';
 import 'package:nex_music/music_data.dart';
@@ -670,6 +671,32 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byTooltip('Watch Video'), findsNothing);
       expect(tester.getRect(play), before);
+      await state.close();
+    },
+  );
+
+  testWidgets(
+    'playing swipes keep the smooth transport icon instead of loading dots',
+    (tester) async {
+      final state = await _mount(tester);
+      state.player.emitState(ProcessingState.buffering, playing: true);
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('loading-dots')), findsNothing);
+      expect(find.byIcon(Icons.pause_circle_filled_rounded), findsOneWidget);
+
+      await tester.drag(
+        find.byKey(const ValueKey('mini-player-gestures')),
+        const Offset(0, -100),
+      );
+      await tester.pump(const Duration(milliseconds: 90));
+      expect(find.byKey(const ValueKey('loading-dots')), findsNothing);
+      expect(find.byIcon(Icons.pause_circle_filled_rounded), findsWidgets);
+
+      await _commitSwipe(tester);
+      expect(state.music.current?.id, 's2');
+      expect(find.byKey(const ValueKey('loading-dots')), findsNothing);
+      expect(find.byIcon(Icons.pause_circle_filled_rounded), findsOneWidget);
       await state.close();
     },
   );

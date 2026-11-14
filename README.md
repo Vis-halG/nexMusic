@@ -4,7 +4,7 @@ Flutter app for shared music, online songs and music videos.
 Signed-in listeners can upload audio songs into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.18+8041` has five tabs: Home, Stream, Library, Downloads and Profile. Home
+Version `0.4.19+8042` has five tabs: Home, Stream, Library, Downloads and Profile. Home
 groups public songs and videos into global recently played/watched, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and an Artists chip that lists the people in the For
@@ -44,6 +44,8 @@ subtle fade; the trailing direction arrows are omitted. The mini player has
 a stack of song cards: dragging moves and fades the current card while revealing
 the next or previous card underneath. Short/cancelled drags settle back, and
 haptics confirm successful playback changes only.
+The mini player keeps its play/pause icon during buffering instead of replacing
+it with a loading indicator, so playing and paused swipes use the same motion.
 Manual swipes wrap within the current queue without changing repeat/autoplay.
 Native preloading, seeking and source edits run in sequence, and callbacks from
 the outgoing source cannot overwrite a manual track change. Failed switches

@@ -1,12 +1,6 @@
 part of 'music_ui.dart';
 
-typedef _MiniTrack = ({
-  Song song,
-  String subtitle,
-  bool playing,
-  bool liked,
-  bool loading,
-});
+typedef _MiniTrack = ({Song song, String subtitle, bool playing, bool liked});
 
 class MiniPlayer extends StatefulWidget {
   const MiniPlayer({super.key});
@@ -60,7 +54,6 @@ class _MiniPlayerState extends State<MiniPlayer>
         : music.categoryName(song.categoryId),
     playing: music.playing,
     liked: music.isLiked(song),
-    loading: music.loading,
   );
 
   @override
@@ -280,7 +273,6 @@ class _MiniPlayerState extends State<MiniPlayer>
             Song? next,
             Song? previous,
             bool playing,
-            bool loading,
             bool liked,
             String subtitle,
             double volume,
@@ -291,7 +283,6 @@ class _MiniPlayerState extends State<MiniPlayer>
             next: music.playback.queue.swipeTarget(next: true),
             previous: music.playback.queue.swipeTarget(next: false),
             playing: music.playing,
-            loading: music.loading,
             liked: music.current != null && music.isLiked(music.current!),
             subtitle: music.current == null
                 ? ''
@@ -331,7 +322,6 @@ class _MiniPlayerState extends State<MiniPlayer>
                     subtitle: _track(music, behind).subtitle,
                     playing: _draining ? state.playing : false,
                     liked: music.isLiked(behind),
-                    loading: _draining && state.loading,
                   ),
                 ),
               ),
@@ -385,7 +375,6 @@ class _MiniPlayerState extends State<MiniPlayer>
                       subtitle: foreground.subtitle,
                       playing: foreground.playing,
                       liked: foreground.liked,
-                      loading: foreground.loading,
                       onLike: () => music.toggleLike(foreground.song),
                       onPlay: () {
                         _swipes.cancel();
@@ -513,13 +502,12 @@ class _MiniPlayerFace extends StatelessWidget {
     required this.subtitle,
     required this.playing,
     required this.liked,
-    this.loading = false,
     this.onLike,
     this.onPlay,
   });
   final Song song;
   final String subtitle;
-  final bool playing, liked, loading;
+  final bool playing, liked;
   final VoidCallback? onLike, onPlay;
   @override
   Widget build(BuildContext context) {
@@ -616,24 +604,13 @@ class _MiniPlayerFace extends StatelessWidget {
     );
   }
 
-  Widget _playIcon() => loading
-      ? const SizedBox.square(
-          dimension: 44,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: NexMusic.violet,
-              shape: BoxShape.circle,
-            ),
-            child: Center(child: _LoadingDots(size: 27, color: Colors.white)),
-          ),
-        )
-      : Icon(
-          playing
-              ? Icons.pause_circle_filled_rounded
-              : Icons.play_circle_filled_rounded,
-          size: 44,
-          color: NexMusic.violet,
-        );
+  Widget _playIcon() => Icon(
+    playing
+        ? Icons.pause_circle_filled_rounded
+        : Icons.play_circle_filled_rounded,
+    size: 44,
+    color: NexMusic.violet,
+  );
 }
 
 class _MiniPlayerPreview extends StatelessWidget {
