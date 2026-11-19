@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark-canvas twin of nexmusic_splash_icon, with the same mask inset. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/nexmusic_splash_mark_dark" android:inset="20%" />

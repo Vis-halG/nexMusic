@@ -94,8 +94,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(find.text('YouTube pick'), findsOneWidget);
     expect(find.text('Watch Music Video'), findsNothing);
-    expect(find.text('Video'), findsOneWidget);
+    expect(find.text('Video'), findsNothing);
     await tester.pumpWidget(
       ChangeNotifierProvider.value(value: controller, child: const NexMusic()),
     );

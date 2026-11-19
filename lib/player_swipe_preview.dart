@@ -85,11 +85,15 @@ class _PlayerSwipePreview {
     if (_pointers.isEmpty && !_released) _startDelay();
   }
 
+  /// Long enough to merge quick successive swipes into one track change,
+  /// short enough that audio follows a single swipe as its card settles.
+  static const settleDelay = Duration(milliseconds: 300);
+
   void _startDelay() {
     _released = true;
     _idle = false;
     _timer?.cancel();
-    _timer = Timer(const Duration(milliseconds: 500), () {
+    _timer = Timer(settleDelay, () {
       _idle = true;
       _schedule();
     });

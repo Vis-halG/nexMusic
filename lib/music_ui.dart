@@ -17,7 +17,6 @@ import 'package:record/record.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:provider/provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
-import 'package:video_player/video_player.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'app_update.dart';
@@ -126,55 +125,12 @@ Future<void> _openSong(
   }
   final music = context.read<MusicController>();
   if (!music.allowsSong(song)) return;
-  if (song.isVideo) {
-    try {
-      final url = await music.resolvedPlayableUrl(song);
-      if (!context.mounted) return;
-      _push(
-        context,
-        VideoScreen(
-          song: song.copyWith(url: url),
-          httpHeaders: music.playbackHeadersFor(song),
-        ),
-      );
-    } catch (_) {
-      music.announce('Could not load this video. Try another result.');
-    }
-    return;
-  }
-  await music.play(song, from: queue);
-}
-
-Future<void> _openSongVideo(BuildContext context, Song song) async {
-  final music = context.read<MusicController>();
-  final account = music.personal;
-  final matching = music.current?.id == song.id;
-  final resume = matching && music.playing;
-  var exitPosition = matching ? music.position : Duration.zero;
-  try {
-    await music.pauseAudio();
-    final videoSong = song.copyWith(kind: 'video');
-    final url = await music.resolvedPlayableUrl(videoSong);
-    if (!context.mounted) return;
-    await Navigator.of(context).push<void>(
-      NexPageRoute(
-        reducedMotion: MediaQuery.disableAnimationsOf(context),
-        builder: (_) => VideoScreen(
-          song: videoSong.copyWith(url: url),
-          httpHeaders: music.playbackHeadersFor(videoSong),
-          initialPosition: exitPosition,
-          onClosed: (position) => exitPosition = position,
-        ),
-      ),
-    );
-    if (account == music.personal && matching && music.current?.id == song.id) {
-      await music.play(song, initialPosition: exitPosition);
-      if (!resume) await music.pauseAudio();
-    }
-  } catch (_) {
-    music.announce('Could not load video for this track.');
-    if (resume && account == music.personal) await music.playback.resume();
-  }
+  // nexMusic plays audio only. Video entries saved by older versions play
+  // their sound like any other song.
+  await music.play(
+    song.asAudio,
+    from: queue?.map((track) => track.asAudio).toList(),
+  );
 }
 
 void _openPlayer(BuildContext context, {Rect? origin, Widget? preview}) {
@@ -905,11 +861,23 @@ class _Thumb extends StatelessWidget {
     this.active = false,
     this.size = 44,
     this.imageUrl = '',
+    this.gapless = false,
   });
   final IconData icon;
   final bool active;
   final double size;
   final String imageUrl;
+
+  /// Keeps the previous cover until the next one has decoded, instead of an
+  /// empty frame, when the same thumb switches songs.
+  final bool gapless;
+
+  /// The decoded size is part of the cache key, so precaching must use the
+  /// same provider as the visible thumb.
+  static ImageProvider imageFor(String url, double size, double pixelRatio) {
+    final pixels = (size * pixelRatio).ceil();
+    return ResizeImage(NetworkImage(url), width: pixels, height: pixels);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -932,17 +900,45 @@ class _Thumb extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: imageUrl.isEmpty
           ? fallback
-          : Image.network(
-              imageUrl,
+          : Image(
+              image: imageFor(
+                imageUrl,
+                size,
+                MediaQuery.devicePixelRatioOf(context),
+              ),
               fit: BoxFit.cover,
-              cacheWidth: (size * MediaQuery.devicePixelRatioOf(context))
-                  .ceil(),
-              cacheHeight: (size * MediaQuery.devicePixelRatioOf(context))
-                  .ceil(),
+              gaplessPlayback: gapless,
               errorBuilder: (_, _, _) => fallback,
             ),
     );
   }
+}
+
+/// Decodes the covers a skip or swipe shows next, at the size [size] draws
+/// them, so a new cover appears in the same frame as its title.
+void _precacheArtwork(
+  BuildContext context,
+  Iterable<Song?> songs,
+  double size,
+) {
+  final pixelRatio = MediaQuery.devicePixelRatioOf(context);
+  final urls = {
+    for (final song in songs)
+      if (song != null && song.artworkUrl.isNotEmpty) song.artworkUrl,
+  };
+  if (urls.isEmpty) return;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!context.mounted) return;
+    for (final url in urls) {
+      unawaited(
+        precacheImage(
+          _Thumb.imageFor(url, size, pixelRatio),
+          context,
+          onError: (_, _) {},
+        ),
+      );
+    }
+  });
 }
 
 class _Avatar extends StatelessWidget {
@@ -1895,7 +1891,7 @@ class _SpotifySongCard extends StatelessWidget {
     final selection = context.watch<SongSelection?>();
     final scheme = Theme.of(context).colorScheme;
     final isCurrent = context.select<MusicController, bool>(
-      (m) => m.current?.id == song.id,
+      (m) => m.nowPlaying?.id == song.id,
     );
     final isPlaying = context.select<MusicController, bool>(
       (m) => m.playing && isCurrent,
@@ -2040,7 +2036,7 @@ class _SpotifySongCard extends StatelessWidget {
       ),
       child: Center(
         child: Icon(
-          song.isVideo ? Icons.play_arrow_rounded : Icons.music_note_rounded,
+          Icons.music_note_rounded,
           size: 38,
           color: NexMusic.violet.withValues(alpha: 0.7),
         ),
@@ -2457,7 +2453,6 @@ class _SpotifyHomeViewState extends State<_SpotifyHomeView> {
           // and the shared catalogue.
           for (final (collection, title) in const [
             (MediaCollection.recent, 'Recently Played'),
-            (MediaCollection.watched, 'Recently Watched'),
             (MediaCollection.likedSongs, 'Liked Songs'),
             (MediaCollection.mostPlayed, 'Most Played'),
             (MediaCollection.neverPlayed, 'Never Played'),
@@ -3309,7 +3304,7 @@ class _QuickPickTile extends StatelessWidget {
     final selection = context.watch<SongSelection?>();
     final scheme = Theme.of(context).colorScheme;
     final isCurrent = context.select<MusicController, bool>(
-      (m) => m.current?.id == song.id,
+      (m) => m.nowPlaying?.id == song.id,
     );
     final isPlaying = context.select<MusicController, bool>(
       (m) => m.playing && isCurrent,
@@ -3333,18 +3328,14 @@ class _QuickPickTile extends StatelessWidget {
                     ? Image.network(
                         song.artworkUrl,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => Icon(
-                          song.isVideo
-                              ? Icons.play_arrow_rounded
-                              : Icons.music_note_rounded,
+                        errorBuilder: (_, _, _) => const Icon(
+                          Icons.music_note_rounded,
                           color: NexMusic.violet,
                           size: 20,
                         ),
                       )
-                    : Icon(
-                        song.isVideo
-                            ? Icons.play_arrow_rounded
-                            : Icons.music_note_rounded,
+                    : const Icon(
+                        Icons.music_note_rounded,
                         color: NexMusic.violet,
                         size: 20,
                       ),
@@ -3909,7 +3900,7 @@ class SongTile extends StatelessWidget {
           })
         >(
           (music) => (
-            active: music.current?.id == song.id,
+            active: music.nowPlaying?.id == song.id,
             playing: music.playing,
             source: music.songSource(song),
             offline: music.isSongDownloaded(song),
@@ -3929,7 +3920,6 @@ class SongTile extends StatelessWidget {
     final download = tile.download;
     final details = [
       tile.source,
-      if (song.isVideo) 'Video',
       if (tile.downloadState != null)
         tile.downloadState!
       else if (download != null)
@@ -3946,8 +3936,6 @@ class SongTile extends StatelessWidget {
         imageUrl: song.artworkUrl,
         icon: tile.active && tile.playing
             ? Icons.graphic_eq_rounded
-            : song.isVideo
-            ? Icons.play_arrow_rounded
             : Icons.music_note_rounded,
       ),
       title: Text(
@@ -5810,9 +5798,13 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
             bool liked,
             Duration duration,
             String category,
+            bool pending,
           })
         >((music) {
-          final song = music.current;
+          // A chosen song shows at once; its timeline starts from zero until
+          // the audible track has switched to it.
+          final song = music.nowPlaying;
+          final pending = song != null && song.id != music.current?.id;
           return (
             song: song,
             playing: music.playing,
@@ -5820,8 +5812,11 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
             shuffle: music.shuffle,
             repeat: music.repeat,
             liked: song != null && music.isLiked(song),
-            duration: music.duration,
+            duration: pending
+                ? Duration(milliseconds: song.durationMs)
+                : music.duration,
             category: song == null ? 'Music' : music.songSource(song),
+            pending: pending,
           );
         });
     final music = context.read<MusicController>();
@@ -5870,25 +5865,6 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
               }
             },
           ),
-          if (song != null && song.providerId.startsWith('yt'))
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: TextButton.icon(
-                onPressed: () => _openSongVideo(context, song),
-                icon: const Icon(
-                  Icons.smart_display_rounded,
-                  size: 20,
-                  color: NexMusic.violet,
-                ),
-                label: const Text(
-                  'Video',
-                  style: TextStyle(
-                    color: NexMusic.violet,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ),
         ],
       ),
       body: song == null
@@ -5909,6 +5885,15 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
                           constraints.maxHeight * 0.4,
                         )
                         .clamp(96.0, 340.0);
+                    final queue = music.playback.queue;
+                    _precacheArtwork(context, [
+                      queue.swipeTarget(next: true),
+                      queue.swipeTarget(next: false),
+                      if (_swipes.active) ...[
+                        _swipes.target(true),
+                        _swipes.target(false),
+                      ],
+                    ], art);
                     return SingleChildScrollView(
                       padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
                       child: ConstrainedBox(
@@ -5932,6 +5917,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
                                         icon: Icons.music_note_rounded,
                                         size: art,
                                         imageUrl: (_artSong ?? song).artworkUrl,
+                                        // A swipe slides the cover out; the
+                                        // old one must not slide back in.
+                                        gapless: _artSong == null,
                                       ),
                                     ),
                                   ),
@@ -6032,7 +6020,10 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
                             const SizedBox(height: 12),
                             ValueListenableBuilder<Duration>(
                               valueListenable: music.positionListenable,
-                              builder: (context, position, _) {
+                              builder: (context, audible, _) {
+                                final position = state.pending
+                                    ? Duration.zero
+                                    : audible;
                                 final max = math
                                     .max(1, state.duration.inMilliseconds)
                                     .toDouble();
@@ -6151,176 +6142,6 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
                 ),
               ),
             ),
-    );
-  }
-}
-
-class VideoScreen extends StatefulWidget {
-  const VideoScreen({
-    super.key,
-    required this.song,
-    this.httpHeaders = const {},
-    this.initialPosition = Duration.zero,
-    this.onClosed,
-  });
-  final Song song;
-  final Map<String, String> httpHeaders;
-  final Duration initialPosition;
-  final void Function(Duration)? onClosed;
-
-  @override
-  State<VideoScreen> createState() => _VideoScreenState();
-}
-
-class _VideoScreenState extends State<VideoScreen> {
-  late final VideoPlayerController _video;
-  bool _failed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    context.read<MusicController>().pauseAudio();
-    final url = widget.song.url;
-    _video = url.startsWith('file:')
-        ? VideoPlayerController.file(File.fromUri(Uri.parse(url)))
-        : VideoPlayerController.networkUrl(
-            Uri.parse(url),
-            httpHeaders: widget.httpHeaders,
-          );
-    _video.addListener(_refresh);
-    // Streaming formats are not bundled with the app, see isStreamingLink.
-    _failed = isStreamingLink(url);
-    if (!_failed) _start();
-  }
-
-  Future<void> _start() async {
-    try {
-      await _video.initialize();
-      if (widget.initialPosition > Duration.zero) {
-        await _video.seekTo(widget.initialPosition);
-      }
-      await _video.play();
-      if (mounted) context.read<MusicController>().recordVideoPlay(widget.song);
-    } catch (_) {
-      if (mounted) setState(() => _failed = true);
-    }
-  }
-
-  void _refresh() {
-    if (mounted) setState(() {});
-  }
-
-  void _toggle() => _video.value.isPlaying ? _video.pause() : _video.play();
-
-  @override
-  void dispose() {
-    widget.onClosed?.call(_video.value.position);
-    _video.removeListener(_refresh);
-    _video.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final value = _video.value;
-    final failed = _failed || value.hasError;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        actions: [
-          if (widget.onClosed != null)
-            IconButton(
-              tooltip: 'Switch to audio',
-              icon: const Icon(Icons.headphones),
-              onPressed: () => Navigator.pop(context),
-            ),
-        ],
-        title: Text(
-          widget.song.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: Center(
-                child: failed
-                    ? const Text(
-                        'This video could not be played.',
-                        style: TextStyle(color: Colors.white70),
-                      )
-                    : !value.isInitialized
-                    ? const _LoadingDots(size: 32, color: Colors.white)
-                    : GestureDetector(
-                        onTap: _toggle,
-                        child: AspectRatio(
-                          aspectRatio: value.aspectRatio,
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              VideoPlayer(_video),
-                              if (!value.isPlaying)
-                                const Icon(
-                                  Icons.play_arrow_rounded,
-                                  size: 64,
-                                  color: Colors.white70,
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-              ),
-            ),
-            if (value.isInitialized && !failed)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 4, 16, 12),
-                child: Row(
-                  children: [
-                    IconButton(
-                      tooltip: value.isPlaying ? 'Pause' : 'Play',
-                      color: Colors.white,
-                      onPressed: _toggle,
-                      icon: Icon(
-                        value.isPlaying
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                      ),
-                    ),
-                    Expanded(
-                      child: VideoProgressIndicator(
-                        _video,
-                        allowScrubbing: true,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        colors: const VideoProgressColors(
-                          playedColor: NexMusic.violet,
-                          bufferedColor: Colors.white24,
-                          backgroundColor: Colors.white12,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      '${_time(value.position)} / ${_time(value.duration)}',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }

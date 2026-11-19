@@ -436,12 +436,16 @@ extension MusicListeningActions on MusicController {
         .toList();
   }
 
+  /// The track players show. A chosen song appears as soon as it is picked;
+  /// [current] stays the audible track until its source has switched.
+  Song? get nowPlaying => playback.requested ?? current;
+
   void _playerChanged() {
     current = playback.queue.current;
     queue = List.of(playback.queue.tracks);
     shuffle = playback.queue.shuffled;
     repeat = playback.queue.repeat != MusicRepeat.off;
-    playing = playback.playing;
+    playing = playback.willPlay;
     loading = playback.loading;
     duration = playback.duration;
     _audioHandler?.queue.add(queue.map(_mediaItem).toList());

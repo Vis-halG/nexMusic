@@ -353,7 +353,7 @@ class MusicController extends ChangeNotifier {
          auth,
          firestore,
          storage,
-         player ?? AudioPlayer(),
+         player ?? createMusicPlayer(),
          audioHandler,
          phone,
          musicProviders ??
@@ -1666,12 +1666,6 @@ class MusicController extends ChangeNotifier {
       .collection(collection, catalogue: [...songs, ...providerSongs])
       .where(personal.accepts)
       .toList();
-
-  void recordVideoPlay(Song song) {
-    library.recordSongPlay(song);
-    personal.recordPlay(song);
-    community.play(song);
-  }
 
   Future<void> toggleShuffle() async {
     playback.queue.setShuffle(!playback.queue.shuffled);

@@ -14,42 +14,43 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'branding_migration.dart';
 import 'firebase_options.dart';
+import 'listening_player.dart';
 import 'music_controller.dart';
 import 'music_ui.dart';
 import 'phone_services.dart';
 import 'personal_music.dart';
-import 'launch_logo.dart';
 import 'keyboard_focus.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   ErrorWidget.builder = (_) => const _NexMusicErrorView();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  if (!kIsWeb) {
-    await GoogleSignIn.instance.initialize(
-      clientId: defaultTargetPlatform == TargetPlatform.iOS
-          ? DefaultFirebaseOptions.ios.iosClientId
-          : null,
-    );
-  }
-  await migrateWindowsBrandingSupportFiles();
-  final preferences = await SharedPreferences.getInstance();
+  final player = createMusicPlayer();
+  // The system splash stays up until the first frame, so independent
+  // platform setup runs side by side: launch waits for the slowest step
+  // instead of the sum of all of them.
+  final firebaseReady = Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  final signInReady = kIsWeb
+      ? Future<void>.value()
+      : GoogleSignIn.instance.initialize(
+          clientId: defaultTargetPlatform == TargetPlatform.iOS
+              ? DefaultFirebaseOptions.ios.iosClientId
+              : null,
+        );
+  // Windows restores the previous brand's files before preferences open.
+  final preferencesReady = migrateWindowsBrandingSupportFiles().then(
+    (_) => SharedPreferences.getInstance(),
+  );
+  final audioReady = _startAudioService(player);
+  await firebaseReady;
+  final preferences = await preferencesReady;
   final existingUser = FirebaseAuth.instance.currentUser;
   if (existingUser != null) {
     await migrateMusicAccount(preferences, existingUser.uid);
   }
-  final player = AudioPlayer();
-  NexAudioHandler? audioHandler;
-  if (!kIsWeb) {
-    try {
-      audioHandler = await AudioService.init(
-        builder: () => NexAudioHandler(player),
-        config: nexAudioServiceConfig,
-      );
-    } catch (error) {
-      debugPrint('Lock screen controls are unavailable: $error');
-    }
-  }
+  await signInReady;
+  final audioHandler = await audioReady;
   runApp(
     ChangeNotifierProvider(
       create: (_) => MusicController(
@@ -70,6 +71,19 @@ Future<void> main() async {
       child: const NexMusic(),
     ),
   );
+}
+
+Future<NexAudioHandler?> _startAudioService(AudioPlayer player) async {
+  if (kIsWeb) return null;
+  try {
+    return await AudioService.init(
+      builder: () => NexAudioHandler(player),
+      config: nexAudioServiceConfig,
+    );
+  } catch (error) {
+    debugPrint('Lock screen controls are unavailable: $error');
+    return null;
+  }
 }
 
 class _NexMusicErrorView extends StatelessWidget {
@@ -306,15 +320,12 @@ class NexMusic extends StatelessWidget {
       themeMode: appState.dark ? ThemeMode.dark : ThemeMode.light,
       scrollBehavior: const NexMusicScrollBehavior(),
       // Browsers turning shared links into audio run behind every page, and
-      // an update download shows its progress under every page.
+      // an update download shows its progress under every page. The first
+      // frame is the app itself; only the Android splash shows the logo.
       builder: (context, child) => SharedAudioHost(
         child: KeyboardDismissFocus(
-          child: LaunchLogo(
-            child: UploadStatusHost(
-              child: UpdateDownloadHost(
-                child: child ?? const SizedBox.shrink(),
-              ),
-            ),
+          child: UploadStatusHost(
+            child: UpdateDownloadHost(child: child ?? const SizedBox.shrink()),
           ),
         ),
       ),

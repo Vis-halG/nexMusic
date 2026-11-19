@@ -102,7 +102,7 @@ class _MiniPlayerState extends State<MiniPlayer>
     final music = context.read<MusicController>();
     setState(() {
       _showVolume = false;
-      final song = _swipes.song ?? music.current;
+      final song = _swipes.song ?? music.nowPlaying;
       _departing = song == null ? null : _track(music, song);
       _target = null;
     });
@@ -146,7 +146,7 @@ class _MiniPlayerState extends State<MiniPlayer>
     try {
       while (mounted && _pendingSwipes.isNotEmpty) {
         final direction = _pendingSwipes.removeAt(0);
-        final previous = _swipes.song ?? music.current;
+        final previous = _swipes.song ?? music.nowPlaying;
         final target = _swipes.target(direction);
         if (target == null ||
             !music.allowsSong(target) ||
@@ -277,22 +277,23 @@ class _MiniPlayerState extends State<MiniPlayer>
             String subtitle,
             double volume,
           })
-        >(
-          (music) => (
-            song: music.current,
+        >((music) {
+          // A chosen song replaces the card as soon as it is picked.
+          final song = music.nowPlaying;
+          return (
+            song: song,
             next: music.playback.queue.swipeTarget(next: true),
             previous: music.playback.queue.swipeTarget(next: false),
             playing: music.playing,
-            liked: music.current != null && music.isLiked(music.current!),
-            subtitle: music.current == null
-                ? ''
-                : music.songSource(music.current!),
+            liked: song != null && music.isLiked(song),
+            subtitle: song == null ? '' : music.songSource(song),
             volume: music.playback.volume,
-          ),
-        );
+          );
+        });
     final song = state.song;
     if (song == null) return const SizedBox.shrink();
     final music = context.read<MusicController>();
+    _precacheArtwork(context, [state.next, state.previous], 44);
     final scheme = Theme.of(context).colorScheme;
     final textScaler = MediaQuery.textScalerOf(context);
     final rowHeight = _cardHeight = math.max(

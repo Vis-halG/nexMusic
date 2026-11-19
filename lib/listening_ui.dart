@@ -53,18 +53,16 @@ List<Widget> _listeningSongActions(
     },
   );
   return [
-    if (!song.isVideo)
-      action(
-        Icons.playlist_play_rounded,
-        'Play next',
-        () => unawaited(music.addToQueue(song, next: true)),
-      ),
-    if (!song.isVideo)
-      action(
-        Icons.queue_music_rounded,
-        'Add to queue',
-        () => unawaited(music.addToQueue(song)),
-      ),
+    action(
+      Icons.playlist_play_rounded,
+      'Play next',
+      () => unawaited(music.addToQueue(song.asAudio, next: true)),
+    ),
+    action(
+      Icons.queue_music_rounded,
+      'Add to queue',
+      () => unawaited(music.addToQueue(song.asAudio)),
+    ),
     action(
       Icons.playlist_add_rounded,
       'Add to playlist',

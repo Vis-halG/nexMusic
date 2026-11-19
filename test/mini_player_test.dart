@@ -114,7 +114,7 @@ Future<_Harness> _mount(
 }
 
 Future<void> _commitSwipe(WidgetTester tester) async {
-  await tester.pump(const Duration(milliseconds: 501));
+  await tester.pump(const Duration(milliseconds: 301));
   await tester.pumpAndSettle();
 }
 
@@ -128,7 +128,7 @@ void main() {
   for (final fullScreen in [false, true]) {
     final label = fullScreen ? 'full player' : 'mini player';
 
-    testWidgets('$label waits for 500ms after release before changing audio', (
+    testWidgets('$label waits for 300ms after release before changing audio', (
       tester,
     ) async {
       final native = _ObservedPlayer();
@@ -150,7 +150,7 @@ void main() {
       expect(vibrations, isEmpty);
 
       await gesture.up();
-      await tester.pump(const Duration(milliseconds: 499));
+      await tester.pump(const Duration(milliseconds: 299));
       expect(state.music.current?.id, 's1');
       expect((native.sourceLoads, native.seeks, native.plays), before);
       expect(native.isPlaying, isTrue);
@@ -179,7 +179,7 @@ void main() {
       await tester.drag(surface, const Offset(0, -90));
       await tester.pump(const Duration(milliseconds: 250));
       await tester.drag(surface, const Offset(0, -90));
-      await tester.pump(const Duration(milliseconds: 499));
+      await tester.pump(const Duration(milliseconds: 299));
       expect(state.music.current?.id, 's1');
       expect((native.sourceLoads, native.seeks, native.plays), before);
       expect(vibrations, isEmpty);
@@ -236,7 +236,7 @@ void main() {
         expect(state.music.current?.id, 's1');
         expect((native.sourceLoads, native.seeks, native.plays), before);
         await held.up();
-        await tester.pump(const Duration(milliseconds: 499));
+        await tester.pump(const Duration(milliseconds: 299));
         expect(state.music.current?.id, 's1');
         expect((native.sourceLoads, native.seeks, native.plays), before);
         await tester.pump(const Duration(milliseconds: 2));
@@ -265,7 +265,7 @@ void main() {
         expect(state.music.current?.id, 's1');
         expect((native.sourceLoads, native.seeks, native.plays), before);
         await cancelled.cancel();
-        await tester.pump(const Duration(milliseconds: 499));
+        await tester.pump(const Duration(milliseconds: 299));
         expect(state.music.current?.id, 's1');
         expect((native.sourceLoads, native.seeks, native.plays), before);
         await tester.pump(const Duration(milliseconds: 2));
@@ -451,7 +451,7 @@ void main() {
       const Offset(0, -90),
     );
     expect(state.music.current?.id, 's1');
-    await tester.pump(const Duration(milliseconds: 499));
+    await tester.pump(const Duration(milliseconds: 299));
     expect(state.music.current?.id, 's1');
     await tester.pump(const Duration(milliseconds: 2));
     await tester.pumpAndSettle();
@@ -808,7 +808,7 @@ void main() {
     final state = await _mount(tester, reducedMotion: true);
     await tester.drag(find.text('Track 1'), const Offset(0, -90));
     expect(state.music.current?.id, 's1');
-    await tester.pump(const Duration(milliseconds: 499));
+    await tester.pump(const Duration(milliseconds: 299));
     expect(state.music.current?.id, 's1');
     await tester.pump(const Duration(milliseconds: 2));
     await tester.pumpAndSettle();

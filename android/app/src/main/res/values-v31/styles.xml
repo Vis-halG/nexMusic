@@ -7,4 +7,13 @@
         <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
         <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
+    <!-- Splash for the app's own dark mode. MainActivity selects it for the
+         next launch on Android 13+ with SplashScreen.setSplashScreenTheme. -->
+    <style name="LaunchTheme.Dark" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@color/nexmusic_dark_canvas</item>
+        <item name="android:windowSplashScreenBackground">@color/nexmusic_dark_canvas</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/nexmusic_splash_icon_dark</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+    </style>
 </resources>

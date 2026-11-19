@@ -84,6 +84,13 @@ class Song {
   bool get isPrivate => id.startsWith(privateSongPrefix);
   bool get isProvider => providerId.isNotEmpty;
 
+  /// The same entry played as sound. The app no longer opens videos; older
+  /// versions saved some songs as videos, together with a stream link that
+  /// has since expired, so a provider entry resolves a fresh link.
+  Song get asAudio => isVideo
+      ? copyWith(kind: 'audio', url: isProvider ? '' : url)
+      : this;
+
   Song copyWith({
     String? id,
     String? title,

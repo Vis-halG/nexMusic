@@ -8,7 +8,9 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.view.animation.DecelerateInterpolator
 import com.ryanheise.audioservice.AudioServiceActivity
 import java.io.BufferedOutputStream
 import java.io.File
@@ -39,6 +41,47 @@ class MainActivity : AudioServiceActivity() {
         NexPhone.createChannels(applicationContext)
         pendingAction = NexPhone.launchAction(intent)
         super.onCreate(savedInstanceState)
+        fadeOutSplashScreen()
+        rememberSplashTheme()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        rememberSplashTheme()
+    }
+
+    /**
+     * Android 12+ draws the launch logo itself and keeps it until Flutter's
+     * first frame. The whole splash then fades out in one short step, rather
+     * than the system's slower icon animation, so no logo stays over the app.
+     */
+    private fun fadeOutSplashScreen() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        splashScreen.setOnExitAnimationListener { view ->
+            view.animate()
+                .alpha(0f)
+                .setDuration(SPLASH_FADE_MS)
+                .setInterpolator(DecelerateInterpolator())
+                .withEndAction { view.remove() }
+                .start()
+        }
+    }
+
+    /**
+     * Android 13+ keeps the splash theme chosen here for the next launch, so
+     * the app's own dark mode opens on a dark splash instead of a white one.
+     * Flutter's shared_preferences stores `darkMode` as `flutter.darkMode`.
+     */
+    private fun rememberSplashTheme() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        try {
+            val dark = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                .getBoolean("flutter.darkMode", false)
+            // ID 0 returns to the manifest's light splash.
+            splashScreen.setSplashScreenTheme(if (dark) R.style.LaunchTheme_Dark else 0)
+        } catch (_: Exception) {
+            // The splash keeps its manifest theme.
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -576,6 +619,8 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private companion object {
+        /** Splash hand-off to the first frame: quick, without a cut. */
+        const val SPLASH_FADE_MS = 150L
         const val PICK_MEDIA_REQUEST = 4242
         const val CODEC_TIMEOUT_US = 10_000L
         const val PCM_CHUNK_BYTES = 16 * 1024

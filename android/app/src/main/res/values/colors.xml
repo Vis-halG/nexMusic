@@ -2,6 +2,8 @@
 <resources>
     <!-- Adaptive launcher backgrounds must be opaque to avoid a dark matte. -->
     <color name="nexmusic_launcher_background">#E8D9FF</color>
+    <!-- The app's dark theme canvas (NexMusic.theme), used by the dark splash. -->
+    <color name="nexmusic_dark_canvas">#0A0A0A</color>
     <!-- Tint for the activity push notification (see AndroidManifest.xml). -->
     <color name="widget_accent">#7C3AED</color>
 </resources>

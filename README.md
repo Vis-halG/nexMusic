@@ -1,15 +1,16 @@
 # nexMusic
 
-Flutter app for shared music, online songs and music videos.
+Flutter app for shared music and online songs.
 Signed-in listeners can upload audio songs into shared categories. Files
 are stored on Cloudinary; Firebase handles login and the shared listing.
 
-Version `0.4.21+8044` has five tabs: Home, Stream, Library, Downloads and Profile. Home
-groups public songs and videos into global recently played/watched, liked,
+Version `0.4.22+8045` has five tabs: Home, Stream, Library, Downloads and Profile. Home
+groups public songs into global recently played, liked,
 most played and never played collections shared across listeners. Stream combines JioSaavn and YouTube Music with
 Quick Picks, song radio and an Artists chip that lists the people in the For
-you feed. Available music videos open from
-the song player. Library is laid out like Stream: search, chips for liked,
+you feed. nexMusic plays audio only: neither player offers a video, and
+entries that older versions saved as videos play their sound like any other
+song. Library is laid out like Stream: search, chips for liked,
 downloaded, category and playlist songs, and Quick Picks. Library Quick Picks
 uses only songs in the library; stream-only listening history stays in Stream,
 whose Quick Picks uses only online provider songs. Holding a chip on
@@ -33,8 +34,9 @@ Swipe the mini player up for the next song or down for the previous song.
 The full-screen player supports the same gestures, with a gentle artwork
 transition while its controls stay in place. The card preview follows the
 finger immediately, while playback changes only after the gesture has been
-idle for 500 ms. Rapid swipes coalesce into one final playback change and a
-paused player stays paused. Swiping the artwork also works
+idle for 300 ms. Rapid swipes coalesce into one final playback change and a
+paused player stays paused. A swipe that overtakes a track still loading keeps
+playing. Swiping the artwork also works
 on short screens where the remaining content needs to scroll. Cancelled
 gestures settle back, and grabbing a settling mini card continues from its
 visible position. Loaded native sources are reused during buffering too.
@@ -50,9 +52,18 @@ Manual swipes wrap within the current queue without changing repeat/autoplay.
 Native preloading, seeking and source edits run in sequence, and callbacks from
 the outgoing source cannot overwrite a manual track change. Failed switches
 restore the previous song and show an error rather than a success vibration.
-The player has a larger play button, and omits the playback timeline and video shortcut.
+The full player has a larger play button and no video shortcut.
 Both adjacent sources resolve in advance; ready native sources are reused
-when skipping forward or backward. Volume stays at the chosen level across
+when skipping forward or backward. Resolved links are reused for 20 minutes,
+and a stale one is resolved again on its first error. A song picked from a list or
+with Next/Previous appears in both players at once, with its timeline at
+zero and the play button showing the intended state, while the outgoing song
+stops instead of playing on under the new title. Pausing during that load
+cancels it. Audio starts once one second is buffered (ExoPlayer waits 2.5 s
+by default), and Android sends provider request headers natively instead of
+through just_audio's local proxy on the UI isolate. Covers of the next and
+previous songs are decoded in advance, at the size each player draws, so a
+new cover appears together with its title. Volume stays at the chosen level across
 track changes, crossfades and sleep-timer cancellation. Reduced-motion settings
 are respected. Multi-select actions use a Queue / Like / Download / More pill with a
 separate circular button that shuffles only the selected songs.
@@ -69,9 +80,11 @@ song names tool removes leading numeric prefixes of any length, updates queued
 titles, and leaves numbers elsewhere in the title intact.
 The app logo is a circular SVG, with matching Android vector artwork and round
 launcher resources. Transparent adaptive-icon margins preserve its circular
-appearance inside launcher masks. Launch uses a 280 ms overlay fade with no
-hold or layout shift;
-the app accepts input from its first frame. Reduced motion skips the effect.
+appearance inside launcher masks. Only the Android splash shows the logo:
+Firebase, sign-in, preferences and the audio service start side by side,
+the first Flutter frame is the app itself, and on Android 12+ the splash
+fades out in 150 ms as soon as that frame is ready. Android 13+ opens on a
+dark splash while the app's own dark mode is on.
 The Android splash uses an unframed vector mark and an explicitly transparent
 icon background in both system themes; no dark badge or welcome-logo shadow.
 Now Playing titles stay on one line with an ellipsis; the details, seek bar and

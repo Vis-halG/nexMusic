@@ -9,6 +9,8 @@ import 'package:nex_music/music_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/playback_test_player.dart';
+
 const _categories = [
   MusicCategory(id: 'bolly', name: 'Bollywood', ownerUid: 'u1'),
   MusicCategory(id: 'lofi', name: 'Lo-fi', ownerUid: 'u2'),
@@ -86,9 +88,7 @@ void _usePhone(WidgetTester tester, Size size) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('video switch is offered only for matching YouTube sources', (
-    tester,
-  ) async {
+  testWidgets('the player offers no video for any source', (tester) async {
     final music = await _controller();
     const audio = Song(
       id: 'provider:jiosaavn:123',
@@ -99,23 +99,60 @@ void main() {
       sourceId: '123',
       artist: 'Singer',
     );
-    music.playback.queue.replace([audio], audio);
-    music.current = audio;
-    await tester.pumpWidget(_app(music, home: const NowPlayingScreen()));
-    expect(find.text('Video'), findsNothing);
-    expect(find.text('Watch Music Video'), findsNothing);
-    final video = audio.copyWith(
+    final youtube = audio.copyWith(
       id: 'provider:ytmusic:abcdefghijk',
       providerId: 'ytmusic',
       sourceId: 'abcdefghijk',
     );
-    music.playback.queue.replace([video], video);
-    music.current = video;
-    music.notifyListeners();
+    await tester.pumpWidget(_app(music, home: const NowPlayingScreen()));
+    for (final song in [audio, youtube]) {
+      music.playback.queue.replace([song], song);
+      music.current = song;
+      music.notifyListeners();
+      await tester.pump();
+      expect(find.text(song.title), findsOneWidget);
+      expect(find.text('Video'), findsNothing);
+      expect(find.textContaining('Watch'), findsNothing);
+      expect(find.byIcon(Icons.smart_display_rounded), findsNothing);
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+    music.dispose();
     await tester.pump();
-    expect(find.text('Video'), findsOneWidget);
-    expect(find.text('Watch Music Video'), findsNothing);
-    expect(find.text('Video'), findsOneWidget);
+  });
+
+  testWidgets('a video saved by an older version plays as a song', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final native = PlaybackTestPlayer();
+    final music = MusicController(
+      await SharedPreferences.getInstance(),
+      player: native,
+    )..songs = _songs;
+    await tester.pumpWidget(
+      _app(
+        music,
+        home: SongListScreen(
+          title: 'Songs',
+          emptyText: 'None',
+          select: (m) => m.songs,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Kesariya'), findsOneWidget);
+    expect(find.text('Video'), findsNothing);
+    expect(find.textContaining('Video ·'), findsNothing);
+    await tester.tap(find.text('Kesariya'));
+    await tester.pumpAndSettle();
+    // No video page opens over the list.
+    expect(find.byType(SongListScreen), findsOneWidget);
+    expect(find.text('Songs'), findsOneWidget);
+    expect(music.current?.id, 's2');
+    expect(music.current?.isVideo, isFalse);
+    expect(native.isPlaying, isTrue);
+    // The rest of the list stays queued around it in order.
+    expect(music.playback.queue.tracks.map((s) => s.id), ['s1', 's2', 's3']);
     await tester.pumpWidget(const SizedBox.shrink());
     music.dispose();
     await tester.pump();

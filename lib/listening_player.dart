@@ -7,6 +7,22 @@ import 'music_data.dart';
 
 typedef MusicSourceResolver = Future<AudioSource> Function(Song song);
 
+/// A player tuned for quick track changes. Playback starts once one second
+/// is buffered instead of ExoPlayer's default 2.5 seconds. Android sends the
+/// provider request headers itself rather than streaming every byte through
+/// just_audio's local proxy on the UI isolate.
+AudioPlayer createMusicPlayer({bool handleAudioSessionActivation = true}) =>
+    AudioPlayer(
+      handleAudioSessionActivation: handleAudioSessionActivation,
+      useProxyForRequestHeaders:
+          kIsWeb || defaultTargetPlatform != TargetPlatform.android,
+      audioLoadConfiguration: const AudioLoadConfiguration(
+        androidLoadControl: AndroidLoadControl(
+          bufferForPlaybackDuration: Duration(seconds: 1),
+        ),
+      ),
+    );
+
 /// Owns actual playback, preloading, transitions and traversal independently of UI.
 class ListeningPlayer extends ChangeNotifier {
   ListeningPlayer({
@@ -24,7 +40,7 @@ class ListeningPlayer extends ChangeNotifier {
     AudioPlayer Function()? standbyPlayerFactory,
   }) : _createStandbyPlayer =
            standbyPlayerFactory ??
-           (() => AudioPlayer(handleAudioSessionActivation: false)) {
+           (() => createMusicPlayer(handleAudioSessionActivation: false)) {
     _attach();
     _clock = Timer.periodic(const Duration(milliseconds: 500), (_) => _tick());
   }
@@ -69,6 +85,7 @@ class ListeningPlayer extends ChangeNotifier {
   final _recoveryAttempts = <String, int>{};
   int _generation = 0, _listened = 0;
   int? _manualGeneration;
+  Song? _requested;
   bool _reloadNeeded = false;
   Future<void> _nativeEdits = Future.value();
   Completer<void>? _advanceDone;
@@ -80,6 +97,16 @@ class ListeningPlayer extends ChangeNotifier {
   final _resolving = <String, Future<AudioSource>>{};
   int _sourceEpoch = 0;
   bool get playing => _player.playing;
+
+  /// Playing as the listener sees it: a manual change that will start audio
+  /// counts as playing while its source loads, so play/pause icons do not
+  /// flicker through the switch.
+  bool get willPlay =>
+      _manualGeneration != null ? _playRequested : _player.playing;
+
+  /// The song a manual change is loading. Players show it at once, while
+  /// [queue] keeps the song that is audible until the switch succeeds.
+  Song? get requested => _manualGeneration == null ? null : _requested;
   bool get loading =>
       _manualGeneration != null ||
       _player.processingState == ProcessingState.loading ||
@@ -242,9 +269,13 @@ class ListeningPlayer extends ChangeNotifier {
   }
 
   Future<AudioSource> _source(Song song) async {
+    // Provider links stay valid for hours. A link that has gone stale fails
+    // like any network error and is resolved again by _recoverPlayback, so
+    // adjacent songs resolved when a track starts still switch instantly
+    // after it has played for a few minutes.
     final cached = _sources[song.id];
     if (cached != null &&
-        DateTime.now().difference(cached.at) < const Duration(minutes: 2)) {
+        DateTime.now().difference(cached.at) < const Duration(minutes: 20)) {
       final source = cached.source;
       return source is UriAudioSource
           ? AudioSource.uri(source.uri, headers: source.headers, tag: song)
@@ -318,7 +349,12 @@ class ListeningPlayer extends ChangeNotifier {
         !(isCurrent?.call() ?? true)) {
       return false;
     }
-    _playRequested = preservePlaybackState ? _player.playing : true;
+    // A switch still in flight may have paused its outgoing source. A newer
+    // swipe keeps the listener's intent instead of that momentary pause.
+    final wasPlaying = _manualGeneration != null
+        ? _playRequested
+        : _player.playing;
+    _playRequested = preservePlaybackState ? wasPlaying : true;
     if (!_recovering) _recoveryAttempts.remove(song.id);
     from = from?.where(_allowed).toList();
     final generation = ++_generation;
@@ -328,6 +364,7 @@ class ListeningPlayer extends ChangeNotifier {
         _allowed(song) &&
         (isCurrent?.call() ?? true);
     _manualGeneration = generation;
+    _requested = song;
     _fading = false;
     notifyListeners();
     Map<String, dynamic>? previousQueue;
@@ -343,6 +380,15 @@ class ListeningPlayer extends ChangeNotifier {
                 .where((s) => s.tag is Song && (s.tag as Song).id == song.id)
                 .firstOrNull
           : null;
+      // A chosen song is shown at once, so the outgoing one stops now rather
+      // than playing on under the new title while the source resolves.
+      // Swipes keep it: a newer preview may still cancel them.
+      if (ready == null && !preservePlaybackState && _player.playing) {
+        await _editSources(() async {
+          if (current()) await _player.pause();
+        });
+        if (!current()) return false;
+      }
       final source = ready != null
           ? AudioSource.uri(ready.uri, headers: ready.headers, tag: song)
           : await _source(song);
@@ -644,7 +690,9 @@ class ListeningPlayer extends ChangeNotifier {
   }
 
   Future<void> toggle() async {
-    if (_player.playing) {
+    // Pausing while a chosen song loads cancels it instead of restarting the
+    // outgoing source.
+    if (willPlay) {
       await pause();
     } else {
       await resume();
